@@ -1,0 +1,16 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/raw/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+
+# Local backups and scratch
+*.tar.gz
+Claude outputs/
+/PMC*.xml
+/PMC*.md

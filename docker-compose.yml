@@ -1,0 +1,36 @@
+name: petfood
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-petfood}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-petfood}
+      POSTGRES_DB: ${POSTGRES_DB:-petfood}
+    ports: ["${POSTGRES_PORT:-5432}:5432"]
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-petfood}"]
+      interval: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    ports: ["6333:6333", "6334:6334"]
+    volumes:
+      - qdrant_data:/qdrant/storage   # project-specific volume, separate from ~/qdrant_data
+
+  s3:
+    # SeaweedFS: S3-compatible object store (MinIO no longer publishes Docker images)
+    image: chrislusf/seaweedfs:3.80
+    command: server -s3 -dir=/data -ip.bind=0.0.0.0
+    ports: ["8333:8333"]
+    volumes:
+      - s3_data:/data
+
+volumes:
+  pg_data:
+  qdrant_data:
+  s3_data:

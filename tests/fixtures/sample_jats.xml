@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC test fixture, not a real article -->
+<article article-type="research-article">
+  <front><article-meta>
+    <title-group><article-title>Dietary protein and body weight in indoor cats</article-title></title-group>
+    <history><date date-type="received"><day>3</day><month>2</month><year>2020</year></date>
+             <date date-type="accepted"><day>9</day><month>6</month><year>2020</year></date></history>
+    <abstract><p>We studied <italic>feline</italic> obesity in 40 indoor cats fed high-protein diets.</p></abstract>
+  </article-meta></front>
+  <body>
+    <sec sec-type="intro"><title>Introduction</title><p>Obesity affects many domestic cats.</p></sec>
+    <sec><title>Materials and Methods</title>
+      <sec><title>Animals</title><p>Forty neutered adult cats were enrolled.</p></sec>
+      <table-wrap id="t1"><label>Table 1</label><caption><p>Diet composition (dry matter basis)</p></caption>
+        <table><thead><tr><th>Nutrient</th><th>Diet A</th><th>Diet B</th></tr></thead>
+          <tbody><tr><td>Crude protein (%)</td><td>45.2</td><td>32.1</td></tr>
+                 <tr><td>Crude fat (%)</td><td>14.0</td><td>18.5</td></tr></tbody></table>
+        <table-wrap-foot><p>Values are means.</p></table-wrap-foot></table-wrap>
+      <fig id="f1"><label>Figure 1</label><caption><p>Body weight change over 12 weeks by diet group.</p></caption></fig>
+      <p>Diets contained 45% protein on a dry matter basis.</p>
+    </sec>
+    <sec><title>Results</title><p>Cats lost 8% of body weight.<xref ref-type="bibr">12</xref></p></sec>
+    <sec><title>Discussion</title><p>High-protein diets preserved lean mass.</p></sec>
+    <sec><title>Conflict of interest</title><p>None declared.</p></sec>
+    <sec><title>Conclusions</title><p>Protein-rich diets support weight loss in cats.</p></sec>
+  </body>
+</article>

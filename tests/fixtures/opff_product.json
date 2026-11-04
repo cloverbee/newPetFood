@@ -1,0 +1,8 @@
+{"code": "0000000000001",
+ "product_name": "Salmon & Rice Adult Dry Cat Food",
+ "brands": "SyntheticBrand,Other",
+ "categories_tags": ["en:pet-food", "en:cat-food", "en:dry-cat-food"],
+ "ingredients_text": "Salmon (26%), rice, chicken fat, maize gluten, dried egg, fish oil, vitamins, minerals",
+ "nutriments": {"proteins_100g": 32, "fat_100g": "14", "fiber_100g": 2.5, "energy-kj_100g": 1600},
+ "labels_tags": ["en:complete-feed"],
+ "image_front_url": "https://example.org/img.jpg", "lang": "en"}

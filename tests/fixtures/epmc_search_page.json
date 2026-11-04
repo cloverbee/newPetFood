@@ -1,0 +1,14 @@
+{"hitCount": 3, "nextCursorMark": "AoE2",
+ "resultList": {"result": [
+  {"id": "1", "pmid": "111", "pmcid": "PMC0000001", "doi": "10.0000/synthetic.1",
+   "title": "Dietary protein and body weight in indoor cats.",
+   "abstractText": "We studied <i>feline</i> obesity in 40 indoor cats fed high-protein diets.",
+   "authorList": {"author": [{"fullName": "Doe J"}, {"fullName": "Roe R"}]},
+   "journalInfo": {"journal": {"title": "Synthetic Journal of Feline Medicine"}},
+   "pubYear": "2021", "license": "cc by"},
+  {"id": "2", "pmcid": "PMC0000002", "title": "Dietary fibre in human adults",
+   "abstractText": "A study of fibre intake in people.", "pubYear": "2020", "license": "cc by"},
+  {"id": "3", "pmcid": "PMC0000003", "title": "Renal diets for cats with CKD",
+   "abstractText": "Dogs with chronic kidney disease were fed phosphorus-restricted diets.",
+   "pubYear": "2019", "license": null}
+ ]}}
