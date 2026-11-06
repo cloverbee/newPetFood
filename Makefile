@@ -1,4 +1,4 @@
-.PHONY: setup up down reset-db test papers products products-us curated stats reparse retag prune study-years index reindex search
+.PHONY: setup up down reset-db test papers products products-us curated stats reparse retag prune study-years index reindex search answer
 
 setup:            ## create venv + install
 	python3 -m venv .venv && .venv/bin/pip install -U pip && .venv/bin/pip install -e ".[dev]"
@@ -50,3 +50,6 @@ reindex:          ## drop the Qdrant collection and rebuild from Postgres
 
 search:           ## make search Q="kidney disease diet" ARGS="--species cat --type paper"
 	.venv/bin/petfood-index search "$(Q)" $(ARGS)
+
+answer:           ## make answer Q="what wet food for an overweight senior cat?" ARGS="--life-stage senior --exclude chicken"
+	.venv/bin/petfood-answer "$(Q)" $(ARGS)

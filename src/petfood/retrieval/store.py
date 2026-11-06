@@ -62,6 +62,12 @@ class SearchFilters:
         if self.exclude_allergens:
             must_not.append(models.FieldCondition(
                 key="allergen_tags", match=models.MatchAny(any=list(self.exclude_allergens))))
+            # Allergen tags come from the ingredient list. A product without one has no tags and
+            # would look allergen-free, so it can't be cleared and is dropped too (D4: conservative).
+            must_not.append(models.Filter(must=[
+                models.FieldCondition(key="doc_type", match=models.MatchValue(value="product")),
+                models.FieldCondition(key="has_ingredients", match=models.MatchValue(value=False)),
+            ]))
         if self.life_stage:
             # "all life stages" products are fine for any stage
             must.append(models.FieldCondition(

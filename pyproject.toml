@@ -22,6 +22,7 @@ dev = ["pytest>=8", "respx>=0.21", "moto[s3]>=5"]
 [project.scripts]
 petfood-ingest = "petfood.ingest.run:main"
 petfood-index = "petfood.retrieval.cli:main"
+petfood-answer = "petfood.recommend.cli:main"
 
 [build-system]
 requires = ["setuptools>=69"]

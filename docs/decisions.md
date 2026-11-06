@@ -4,10 +4,11 @@ Short records of each design decision, written so I can explain the trade-offs i
 Each one also says where it lives in the code, how to run it, and what's still open, so work
 can pick up again after a break.
 
-## Where we are (2026-11-03)
+## Where we are (2026-11-05)
 
-**Phases:** 0–2 done (infra, ingestion, hybrid search). Phase 3 (LLM router) is next; only a
-minimal DeepSeek client exists (`src/petfood/llm/deepseek.py`, used by D12).
+**Phases:** 0–2 done (infra, ingestion, hybrid search). Phase 4's core is in: `petfood-answer`
+retrieves products + papers, has DeepSeek write a cited answer, and checks it in code (D14).
+Phase 3 (router + local model) is not started; only the DeepSeek client exists.
 
 **Data loaded right now** (services up via `make up`; check with `make stats`):
 
@@ -18,14 +19,16 @@ minimal DeepSeek client exists (`src/petfood/llm/deepseek.py`, used by D12).
 | Study years | 8 found · 22 not_stated · 8 no_dates · 0 pending | `make study-years` has run on every paper (D12) |
 | Products | 165 | Open Pet Food Facts, cats + dogs; curated CSV is a stub (D2) |
 | Chunks | 1,508 paper + 165 product = 1,673 | Qdrant `petfood_chunks` has 1,673 points, so it's in sync |
-| Tests | 81 pass, 4 skipped | Skipped = Postgres integration tests (need `PETFOOD_TEST_DB`) |
+| Tests | 97 pass, 4 skipped | Skipped = Postgres integration tests (need `PETFOOD_TEST_DB`) |
 
 **Pick up here:**
-1. **Load the full corpus under the D13 scope.** About 680 papers match but only 38 are loaded.
-   Run `make papers LIMIT=700`, then `make reparse`, `make retag`, `make study-years`, `make index`.
-2. **Widen recall for diet-managed diseases** (CKD/renal, urinary/struvite, food allergy). D13
-   misses them when the title has no diet word. See D13 "Open".
-3. **Phase 3:** Ollama client for Qwen3-8B, then the rules router (D7).
+1. **Allergen tagging gaps (D4):** "poultry" and "meat by-products" don't count as chicken. The
+   LLM noticed this itself in a real answer; the tags should catch it first.
+2. **~20 test questions** with the papers/products a good answer should use, run through
+   `petfood-answer --json`. That's the start of the Phase 6 eval set and the router's data.
+3. **Phase 3:** Ollama client for Qwen3-8B with the same `chat_json` shape, then the rules router (D7).
+4. Full corpus load: on hold by choice (2026-11-04); 38 papers is enough to build the pipeline.
+   When wanted: `make papers LIMIT=700`, then reparse, retag, study-years, index.
 
 **Repo:** first commit `75119cd` pushed to `github.com/cloverbee/newPetFood` (`main`) on 2026-11-03.
 Backups (`.phase*.tar.gz`, `.tables.tar.gz`), `Claude outputs/` and the sample `PMC*.xml/.md`
@@ -64,7 +67,8 @@ files in the root are git-ignored on purpose.
 - This is also easy to test. Constraint-violation rate is one of the Phase 6 metrics.
 - **Code:** `ingest/tagging.py`. `PROTEIN_SOURCES` (chicken, turkey, duck, poultry, beef, lamb, pork, fish, shellfish, venison, rabbit, egg, insect) and `OTHER_ALLERGENS` (grain, gluten, dairy, soy) are word lists. `_FALSE_POSITIVES` blanks out "grain-free", "no added wheat" and the like before matching. `tag_ingredients()` also sets `protein_sources` and `grain_free`; `detect_life_stage()` and `detect_food_form()` fill those columns.
 - **Filter:** `SearchFilters.exclude_allergens` in `retrieval/store.py` becomes a Qdrant `must_not` on `allergen_tags`. CLI: `--exclude chicken fish`.
-- **Open:** "poultry" is a separate tag from "chicken", so excluding chicken does not exclude "poultry meal". Decide whether chicken should imply poultry (safer) before Phase 4.
+- **Products with no ingredient list are dropped whenever allergens are excluded** (added 2026-11-05). Tags come from ingredients, so such a product has no tags and used to look allergen-free. Rule in `SearchFilters.to_qdrant()`, re-checked in `recommend/answer.py` `check_answer()`.
+- **Open:** "poultry" is a separate tag from "chicken", so excluding chicken does not exclude "poultry meal". "Meat by-products", "animal digest" and unnamed "liver" get no tag at all. Fix before showing recommendations to real users: chicken should imply poultry, and unnamed animal sources should count as every meat.
 
 ## D5. Raw files go in object storage
 - The raw JATS XML is kept in S3 (SeaweedFS locally), so we can re-parse later (for example with better section handling) without downloading everything from Europe PMC again.
@@ -153,3 +157,15 @@ files in the root are git-ignored on purpose.
 - **Open: recall for disease papers.** Candidate fix: a second title rule of cat word + disease word (renal, kidney, CKD, urinary, struvite, oxalate, urolith, allergy, adverse food reaction, diabetes, hepatic lipidosis), but only when the abstract mentions diet. Measure precision on a trial fetch of 30 first, as was done for v2.
 - **Open:** the 2005 lower bound is a guess; older feeding trials (e.g. taurine work from the 1980s–90s) are excluded.
 - **Note:** the paper tag `species` can still include `dog` (20 of the 38 papers) because titles like "dog and cat foods" are in scope. The `--species cat` filter still works.
+
+## D14. Answer generation: label the context, let code check the model (Phase 4 core)
+- Retrieval stops at a list of chunks. `answer()` adds the generation step: one product search (filtered by the pet's species, life stage, food form and allergens) plus one paper search (species, optional year filters), then one DeepSeek call, then code checks.
+- **Labels instead of free text.** The prompt lists products as `[P1]…` and paper excerpts as `[E1]…` (with title, section, publication year and study period). The model must recommend by P-label and cite by E-label, so every claim can be checked exactly and mapped back to a product id or PMC id.
+- **Code decides what survives, not the model** (`check_answer()`): unknown product labels and invented citations are dropped; recommended products are re-checked against the allergen, ingredient-list and species rules even though the search already filtered them; at most 3 recommendations; leftover P-labels in prose are replaced with product names. Everything removed is listed in `warnings`.
+- **The vet note is a rule:** it's added when the profile lists a condition or the question hits a medical topic (obesity, renal, urinary, diabetes, food allergy, GI, cardiac, hepatic). The model can't skip it.
+- **No context, no LLM call:** if both searches return nothing, the answer says so instead of letting the model guess.
+- **Code:** `src/petfood/recommend/answer.py` (`PetProfile`, `PaperFilters`, `gather_context`, `build_prompt`, `check_answer`, `answer`); terminal wrapper `src/petfood/recommend/cli.py`; tests `tests/test_answer.py` (in-memory Qdrant, fake encoders, fake LLM). The LLM is any `(system, user) -> dict` callable, so Phase 3 can swap in Qwen3 without touching this code.
+- **Run:** `petfood-answer "question" --species cat --life-stage senior --food-form wet --exclude chicken --condition overweight`, or `make answer Q="…" ARGS="…"`. `--show-prompt` prints the prompt without calling the LLM; `--json` prints everything (sources, warnings, timings); `--no-rerank` skips the cross-encoder.
+- **Cost:** the reranker dominates: ~11–13 s per answer on CPU (two searches) vs ~40 ms with `--no-rerank`. DeepSeek takes ~2–2.5 s. Loading the reranker once in a long-running API process won't fix this, because the time is in scoring, not loading: fewer rerank candidates or a smaller reranker are the levers (Phase 6 can measure the quality cost).
+- **First real runs (2026-11-05):** the hydration question got 3 wet foods with correct citations. The overweight + chicken-allergy question got no recommendation, because the 3 remaining chicken-free wet foods didn't fit, and the model said so and pointed to a vet. That's the intended behaviour with a thin corpus.
+- **Open:** the product search uses the whole question as its query, so "overweight" doesn't steer it to low-calorie foods; filtering or sorting on `kcal_per_100g`/`fat_pct` would. With no life stage given, kitten foods can appear for an adult cat.
