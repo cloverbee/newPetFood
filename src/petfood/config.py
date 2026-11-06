@@ -26,7 +26,8 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
     ollama_base_url: str = "http://localhost:11434"
-    local_model: str = "qwen3:8b"
+    local_model: str = "qwen3:4b"
+    local_think: bool = False   # Qwen3 "thinking" mode: ~4x slower, rarely needed with a JSON schema
 
     contact_email: str = "you@example.com"  # sent to Europe PMC / OPFF as polite User-Agent
 

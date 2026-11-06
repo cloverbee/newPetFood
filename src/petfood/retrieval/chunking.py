@@ -213,6 +213,8 @@ def chunk_product(p: dict) -> Chunk:
             "has_nutrients": p.get("protein_pct") is not None,
             "protein_pct": num("protein_pct"),
             "fat_pct": num("fat_pct"),
+            "fiber_pct": num("fiber_pct"),
+            "moisture_pct": num("moisture_pct"),
             "kcal_per_100g": num("kcal_per_100g"),
             "url": p.get("url"),
         },

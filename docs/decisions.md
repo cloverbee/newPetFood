@@ -8,7 +8,8 @@ can pick up again after a break.
 
 **Phases:** 0–2 done (infra, ingestion, hybrid search). Phase 4's core is in: `petfood-answer`
 retrieves products + papers, has DeepSeek write a cited answer, and checks it in code (D14).
-Phase 3 (router + local model) is not started; only the DeepSeek client exists.
+Phase 3 has started: a local Qwen3-4B client via Ollama exists and `petfood-answer --llm local`
+uses it (D15). There is still **no router**: the model is chosen by hand with `--llm`.
 
 **Data loaded right now** (services up via `make up`; check with `make stats`):
 
@@ -17,16 +18,21 @@ Phase 3 (router + local model) is not started; only the DeepSeek client exists.
 | Papers | 38 | All cats, all full text. Left after `prune --yes` applied the D13 scope to the earlier 240 |
 | Table sections | 150 | From `make reparse` (D11) |
 | Study years | 8 found · 22 not_stated · 8 no_dates · 0 pending | `make study-years` has run on every paper (D12) |
-| Products | 165 | Open Pet Food Facts, cats + dogs; curated CSV is a stub (D2) |
+| Products | 165 (75 cat, 90 dog) | Open Pet Food Facts; curated CSV is a stub (D2). **Mostly empty:** of 75 cat foods, 34 have ingredients, 11 protein, 2 moisture (D16) |
 | Chunks | 1,508 paper + 165 product = 1,673 | Qdrant `petfood_chunks` has 1,673 points, so it's in sync |
-| Tests | 97 pass, 4 skipped | Skipped = Postgres integration tests (need `PETFOOD_TEST_DB`) |
+| Tests | 110 pass, 4 skipped | Skipped = Postgres integration tests (need `PETFOOD_TEST_DB`) |
 
 **Pick up here:**
+0. **Product data is the weakest link (D16):** most cat products have no ingredients or nutrients,
+   so answers can't compare them. Options: OPFF bulk dump with `--require-ingredients`, or fill
+   `data/products_curated.csv` for ~20 common US cat foods.
 1. **Allergen tagging gaps (D4):** "poultry" and "meat by-products" don't count as chicken. The
    LLM noticed this itself in a real answer; the tags should catch it first.
 2. **~20 test questions** with the papers/products a good answer should use, run through
    `petfood-answer --json`. That's the start of the Phase 6 eval set and the router's data.
-3. **Phase 3:** Ollama client for Qwen3-8B with the same `chat_json` shape, then the rules router (D7).
+3. **Phase 3:** the rules router (D7), choosing `--llm local` vs `deepseek` per question, with a
+   DeepSeek retry when the local answer fails `check_answer()`. The 20 questions decide whether
+   qwen3:4b is good enough (see D15's first comparison: it isn't yet).
 4. Full corpus load: on hold by choice (2026-11-04); 38 papers is enough to build the pipeline.
    When wanted: `make papers LIMIT=700`, then reparse, retag, study-years, index.
 
@@ -169,3 +175,34 @@ files in the root are git-ignored on purpose.
 - **Cost:** the reranker dominates: ~11–13 s per answer on CPU (two searches) vs ~40 ms with `--no-rerank`. DeepSeek takes ~2–2.5 s. Loading the reranker once in a long-running API process won't fix this, because the time is in scoring, not loading: fewer rerank candidates or a smaller reranker are the levers (Phase 6 can measure the quality cost).
 - **First real runs (2026-11-05):** the hydration question got 3 wet foods with correct citations. The overweight + chicken-allergy question got no recommendation, because the 3 remaining chicken-free wet foods didn't fit, and the model said so and pointed to a vet. That's the intended behaviour with a thin corpus.
 - **Open:** the product search uses the whole question as its query, so "overweight" doesn't steer it to low-calorie foods; filtering or sorting on `kcal_per_100g`/`fat_pct` would. With no life stage given, kitten foods can appear for an adult cat.
+
+## D15. Local model: Qwen3-4B on Ollama, thinking off, schema-enforced JSON (Phase 3)
+- **Why Ollama:** one install, a local HTTP server that keeps the model loaded, Apple-GPU (Metal) support, and an API shaped like DeepSeek's. vLLM is the production choice for many users on NVIDIA GPUs but has no Apple-GPU support; switching later is a URL change. MLX is the fallback if Ollama is too slow on the Mac.
+- **Why 4B, not 8B:** the Mac has 16 GB and Docker reserves 7.6 GB. qwen3:4b uses ~2.5 GB. Below ~3–4B, models break strict JSON and citation rules.
+- **Install (2026-11-05):** Homebrew failed because `/etc/hosts` pins `raw.githubusercontent.com` to an old address (`199.232.28.133`) with the wrong TLS certificate. That line was left alone on purpose. Ollama 0.40.15 was installed from the official release tarball into `~/.local/ollama`, linked as `~/.local/bin/ollama`. Models live in `~/.ollama/models`.
+- **Start it** (not auto-started; needed after every reboot): `nohup ollama serve > ~/.ollama/serve.log 2>&1 &`. Check: `curl localhost:11434/api/version`.
+- **Measured on the M3 (Metal GPU):** ~31 tokens/s generation; first call loads the model in ~3 s.
+  - Thinking on: correct answers but ~700 tokens of reasoning first (~26 s for one sentence).
+  - Thinking off + plain JSON mode: valid JSON with invented keys (`task`, `reasoning`).
+  - **Thinking off + a JSON schema in `format`: correct shape in 1.7 s.** That's the setting used.
+- **Code:** `src/petfood/llm/ollama.py` `OllamaClient.chat_json(system, user, schema=None)`: `think` from `LOCAL_THINK` (default false), temperature 0, retries on 5xx, clear errors when the server is down (`ollama serve`) or the model is missing (`ollama pull`). `ANSWER_SCHEMA` in `recommend/answer.py`. Config: `LOCAL_MODEL=qwen3:4b`, `LOCAL_THINK=false`. Tests: `tests/test_ollama.py` (HTTP mocked).
+- **Run:** `petfood-answer "question" --llm local` (default `--llm deepseek`).
+- **First comparison** ("Is wet food better than dry for hydration?", same retrieval, `--no-rerank`):
+
+  | | qwen3:4b (local) | deepseek-chat (API) |
+  |---|---|---|
+  | Generation time | ~19 s | ~2.6 s |
+  | Citations in summary | none; "research shows…" uncited | inline [E1][E3] |
+  | Faithfulness | said the research doesn't compare wet vs dry (E1 does); **gave Fussy Cat 84.5% moisture, copied from another product** (DB has no value) | claims match the excerpts and product cards |
+  | Picks | same 3 wet foods | same 3 wet foods |
+
+  The long prompt (~8 product cards + 5 excerpts) is what's slow locally: the laptop has to read it all before writing.
+- **Open:** local-model latency: try fewer products/excerpts for local runs, or MLX. (The invented-number problem is handled by D16.)
+
+## D16. Show missing values; check every number against its source
+- **Why:** qwen3:4b gave Fussy Cat "84.5% moisture", copied from the Mars card next to it. LLMs write the most likely next word; the only moisture number in the prompt was the likeliest fit, and a 4B model is weak at keeping each fact attached to its product ("attribute binding"). The prompt made it worse: a missing value was silently left out, so nothing said "unknown".
+- **Missing values are stated in the prompt:** each product gets `Not listed: protein, fat, fiber, moisture, calories, ingredients` for whatever it lacks, plus a rule: only state a product number that appears in that product's own entry. This line is **not** in the search index: "moisture: not listed" on every card would make a keyword search for "moisture" match every product. Code: `product_entry()`, `_missing_facts()` in `recommend/answer.py`; `fiber_pct` and `moisture_pct` added to the product payload (`chunking.py` `chunk_product`), re-indexed 2026-11-05.
+- **Number check in code** (`_drop_unsupported_numbers()`, called from `check_answer()`): every number in a recommendation's reason must appear in that product's entry, an excerpt the reason cites, or the question. Every number in the summary must appear somewhere in the prompt. A sentence that fails is removed with a warning; a recommendation with no sentence left is dropped. Numbers glued to letters ("B12") are ignored; [E#] labels are removed before matching. The prompt text and the check use the same `product_entry()` / `evidence_entry()`, so they compare against exactly what the model saw.
+- **Limits:** the summary is checked against the whole prompt, so a summary that pins a real number on the wrong product still passes; only reasons are checked per product. Numbers written as words ("two") aren't checked. Rounding ("about 85%" for 84.5) is rejected, which is strict but safe.
+- **Result on the same hydration question:** both models now attach 84.5% to the right product and say "moisture is not listed" for the others. No sentence needed removing. qwen3:4b took 19 s on the first run and 65 s on this one with a nearly identical prompt; the cause wasn't investigated (likely memory pressure or a model reload), so local latency is unreliable on this laptop.
+- **What it exposed:** product data is mostly empty. Of 75 cat products: 34 have an ingredient list, 11 protein, 13 calories, **2 moisture**. 7 of the 8 products in the hydration prompt had no nutrition values or ingredients. Answers can't compare products on facts that aren't there, so better product data (D2) matters more than model tuning right now.

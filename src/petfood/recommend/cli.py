@@ -39,7 +39,7 @@ def _print(a: Answer) -> None:
         print("\nChecks removed:")
         for w in a.warnings:
             print(f"  - {w}")
-    print(f"\n(context: {a.n_products} products, {a.n_evidence} excerpts · "
+    print(f"\n(model: {a.model} · context: {a.n_products} products, {a.n_evidence} excerpts · "
           f"timings ms: { {k: round(v) for k, v in a.timings_ms.items()} })")
 
 
@@ -58,6 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--k-products", type=int, default=8)
     p.add_argument("--k-evidence", type=int, default=5)
     p.add_argument("--no-rerank", action="store_true", help="skip the cross-encoder (faster, less precise)")
+    p.add_argument("--llm", choices=["deepseek", "local"], default="deepseek",
+                   help="which model writes the answer: DeepSeek API or the local Ollama model (LOCAL_MODEL)")
     p.add_argument("--show-prompt", action="store_true", help="print the prompt and stop (no LLM call)")
     p.add_argument("--json", action="store_true", help="print the full answer as JSON")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -83,10 +85,20 @@ def main(argv: list[str] | None = None) -> None:
         print(f"── system ──\n{system}\n\n── user ──\n{user}")
         return
 
-    from petfood.llm.deepseek import DeepSeekClient
+    if args.llm == "local":
+        from functools import partial
 
-    a = answer(args.question, pet, retriever, DeepSeekClient().chat_json, papers,
-               args.k_products, args.k_evidence)
+        from petfood.llm.ollama import OllamaClient
+        from petfood.recommend.answer import ANSWER_SCHEMA
+        client = OllamaClient()
+        llm = partial(client.chat_json, schema=ANSWER_SCHEMA)
+    else:
+        from petfood.llm.deepseek import DeepSeekClient
+        client = DeepSeekClient()
+        llm = client.chat_json
+
+    a = answer(args.question, pet, retriever, llm, papers, args.k_products, args.k_evidence)
+    a.model = client.model
     if args.json:
         print(json.dumps(a.to_dict(), indent=2, ensure_ascii=False))
     else:

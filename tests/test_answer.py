@@ -173,3 +173,68 @@ def test_answer_without_context_skips_llm(retriever):
     a = answer("anything", PetProfile(species="cat", food_form="raw"), retriever, llm,
                k_products=5, k_evidence=0)
     assert llm.calls == [] and a.recommendations == [] and "No matching" in a.summary
+
+
+# ───────────── missing values + number check (D16) ─────────────
+def _card(name, text, doc_id, **facts):
+    return Candidate(id=name, payload={"doc_type": "product", "doc_id": doc_id, "name": name, "brand": "B",
+                                       "species": ["cat"], "allergen_tags": [], "has_ingredients": True,
+                                       "text": text, **facts})
+
+
+MARS = _card("Mars Gelee", "Mars Gelee for cats, wet food\nGuaranteed analysis: protein 9%, moisture 84.5%", 1,
+             protein_pct=9.0, fat_pct=3.0, fiber_pct=0.5, moisture_pct=84.5, kcal_per_100g=80.0)
+FUSSY = _card("Fussy Cat", "Fussy Cat for cats, wet food\nIngredients: tuna, vitamin B12", 2)
+STUDY = Candidate(id="e1", payload={"doc_type": "paper", "source_id": "PMC9", "title": "Water intake in cats",
+                                    "heading": "Results", "pub_year": 2020,
+                                    "body": "Cats fed diets above 65% moisture drank less but took in more water."})
+
+
+def test_prompt_lists_missing_values_only_in_the_prompt():
+    _s, user = build_prompt("q", PetProfile(), [MARS, FUSSY], [])
+    assert "[P2] Fussy Cat" in user and "Not listed: protein, fat, fiber, moisture, calories" in user
+    assert user.count("Not listed") == 1                              # Mars has every value
+    assert "Not listed" not in FUSSY.text                              # the indexed card is unchanged
+
+
+def test_number_copied_from_another_product_is_caught():
+    """The real qwen3:4b mistake: Fussy Cat given the Mars product's 84.5% moisture."""
+    raw = {"summary": "", "recommendations": [
+        {"product": "P1", "reason": "It lists 84.5% moisture.", "evidence": []},
+        {"product": "P2", "reason": "Fussy Cat has high moisture content (84.5%) which supports hydration.",
+         "evidence": []}]}
+    _s, recs, _c, warnings = check_answer(raw, PetProfile(), [MARS, FUSSY], [])
+    assert [r.label for r in recs] == ["P1"]                           # Mars's own number is fine
+    assert any("P2: removed sentence with unsupported number(s) 84.5" in w for w in warnings)
+    assert any("dropped P2 (Fussy Cat): no supported reason left" in w for w in warnings)
+
+
+def test_numbers_from_cited_research_and_question_are_allowed():
+    raw = {"summary": "", "recommendations": [{"product": "P2", "evidence": ["E1"],
+           "reason": "At 12 years old your cat benefits from wet food. Diets above 65% moisture raise water "
+                     "intake [E1]. It adds vitamin B12."}]}
+    _s, recs, _c, warnings = check_answer(raw, PetProfile(), [MARS, FUSSY], [STUDY],
+                                          question="My 12 year old cat drinks little")
+    assert warnings == [] and recs[0].reason.count(".") == 3          # 12 from question, 65 from E1, B12 ignored
+
+
+def test_research_number_without_citing_it_is_removed():
+    raw = {"summary": "", "recommendations": [{"product": "P2", "evidence": [],
+           "reason": "A wet food. It has 65% moisture."}]}
+    _s, recs, _c, warnings = check_answer(raw, PetProfile(), [MARS, FUSSY], [STUDY])
+    assert recs[0].reason == "A wet food." and "65" in warnings[0]
+
+
+def test_dropped_sentence_takes_its_citation_with_it():
+    raw = {"summary": "", "recommendations": [{"product": "P2", "evidence": [],
+           "reason": "A wet option. It has 70% moisture [E1]."}]}
+    _s, recs, cited, _w = check_answer(raw, PetProfile(), [MARS, FUSSY], [STUDY])
+    assert recs[0].reason == "A wet option." and recs[0].evidence == [] and cited == set()
+
+
+def test_summary_numbers_are_checked_against_all_context():
+    raw = {"summary": "Wet diets above 65% moisture help [E1]. Mars Gelee has 84.5% moisture. "
+                      "Most cats need 300 kcal a day.", "recommendations": []}
+    summary, _r, _c, warnings = check_answer(raw, PetProfile(), [MARS, FUSSY], [STUDY])
+    assert summary == "Wet diets above 65% moisture help [E1]. Mars Gelee has 84.5% moisture."
+    assert "300" in warnings[0]

@@ -19,6 +19,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 
 from petfood.ingest.tagging import detect_topics
+from petfood.retrieval.chunking import split_sentences
 from petfood.retrieval.pipeline import Candidate, HybridRetriever
 from petfood.retrieval.store import SearchFilters
 
@@ -84,6 +85,7 @@ class Answer:
     warnings: list[str] = field(default_factory=list)   # what the checks removed, and why
     n_products: int = 0        # candidates the model saw
     n_evidence: int = 0
+    model: str | None = None   # which LLM wrote it; set by the caller
     timings_ms: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -118,12 +120,31 @@ Rules:
   from the RESEARCH list, and only when the excerpt actually supports the claim.
 - If the research does not address the question, say so plainly. Do not invent studies, numbers
   or product facts that are not in the text.
+- Only state a number about a product (moisture, protein, calories, ...) if it appears in THAT
+  product's own entry. "Not listed" means the value is unknown: say nothing about it.
 - Keep the summary to 3-5 sentences in plain language. In the summary and reasons, refer to
   products by name, never by their P label (the owner never sees the labels).
 
 Reply with JSON only:
 {"summary": "<answer with [E#] citations>",
  "recommendations": [{"product": "P#", "reason": "<1-2 sentences, may cite [E#]>", "evidence": ["E#"]}]}"""
+
+
+# Exact reply shape. Local models get it enforced by Ollama (format=<schema>); DeepSeek's JSON mode
+# can't take a schema, so for it the prompt's example is the only guide and check_answer() the guard.
+ANSWER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "recommendations": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"product": {"type": "string"}, "reason": {"type": "string"},
+                           "evidence": {"type": "array", "items": {"type": "string"}}},
+            "required": ["product", "reason", "evidence"],
+        }},
+    },
+    "required": ["summary", "recommendations"],
+}
 
 
 def _profile_text(pet: PetProfile) -> str:
@@ -145,20 +166,46 @@ def _years(p: dict) -> str:
     return f"published {p.get('pub_year') or '?'}, study period {study}"
 
 
+# Product facts the prompt reports as missing when the product has no value for them. The search
+# index doesn't carry these lines: "moisture: not listed" on every card would make a keyword
+# search for "moisture" match every product.
+_FACTS = [("protein", "protein_pct"), ("fat", "fat_pct"), ("fiber", "fiber_pct"),
+          ("moisture", "moisture_pct"), ("calories", "kcal_per_100g")]
+
+
+def _missing_facts(p: dict) -> list[str]:
+    missing = [name for name, key in _FACTS if p.get(key) is None]
+    if not p.get("has_ingredients"):
+        missing.append("ingredients")
+    return missing
+
+
+def product_entry(c: Candidate) -> str:
+    """A product exactly as the model sees it (also what the number check compares against)."""
+    text = c.text[:MAX_PRODUCT_CHARS]
+    missing = _missing_facts(c.payload)
+    return text + (f"\nNot listed: {', '.join(missing)}" if missing else "")
+
+
+def evidence_entry(c: Candidate) -> str:
+    """A research excerpt exactly as the model sees it."""
+    p = c.payload
+    body = (p.get("body") or c.text)[:MAX_EVIDENCE_CHARS]
+    return f"\"{p.get('title')}\" — {p.get('heading')} ({_years(p)})\n{body}"
+
+
 def build_prompt(question: str, pet: PetProfile, products: list[Candidate],
                  evidence: list[Candidate]) -> tuple[str, str]:
     lines = [f"QUESTION: {question}", f"PET: {_profile_text(pet)}", "", "PRODUCTS:"]
     if not products:
         lines.append("(none matched the pet's constraints)")
     for i, c in enumerate(products, 1):
-        lines.append(f"[P{i}] {c.text[:MAX_PRODUCT_CHARS]}")
+        lines.append(f"[P{i}] {product_entry(c)}")
     lines += ["", "RESEARCH:"]
     if not evidence:
         lines.append("(no relevant research found)")
     for i, c in enumerate(evidence, 1):
-        p = c.payload
-        body = (p.get("body") or c.text)[:MAX_EVIDENCE_CHARS]
-        lines.append(f"[E{i}] \"{p.get('title')}\" — {p.get('heading')} ({_years(p)})\n{body}")
+        lines.append(f"[E{i}] {evidence_entry(c)}")
     return SYSTEM_PROMPT, "\n".join(lines)
 
 
@@ -195,17 +242,48 @@ def _name_products(text: str, p_by_label: dict[str, Candidate]) -> str:
     return _P_LABEL.sub(repl, text)
 
 
+# A number not glued to a letter or another digit: matches "84.5", "12", "3" in "3–11%",
+# but not the "12" in "B12". Labels like [E1] are removed before matching.
+_NUMBER = re.compile(r"(?<![A-Za-z\d.])\d+(?:\.\d+)?")
+
+
+def _numbers(text: str) -> set[float]:
+    return {float(n) for n in _NUMBER.findall(_LABEL.sub(" ", text))}
+
+
+def _drop_unsupported_numbers(text: str, allowed: set[float], warnings: list[str], where: str) -> str:
+    """Remove each sentence that states a number found nowhere in the text it may rely on.
+    Catches facts copied from the wrong product (attribute binding errors), see D16."""
+    kept = []
+    for sent in split_sentences(text):
+        bad = _numbers(sent) - allowed
+        if bad:
+            nums = ", ".join(f"{n:g}" for n in sorted(bad))
+            warnings.append(f"{where}: removed sentence with unsupported number(s) {nums}: {sent[:90]!r}")
+        else:
+            kept.append(sent)
+    return " ".join(kept)
+
+
 def check_answer(raw: dict, pet: PetProfile, products: list[Candidate],
-                 evidence: list[Candidate]) -> tuple[str, list[Recommendation], set[str], list[str]]:
+                 evidence: list[Candidate], question: str = "",
+                 ) -> tuple[str, list[Recommendation], set[str], list[str]]:
     """Keep only what the retrieved context supports. Returns (summary, recommendations,
     cited E-labels, warnings)."""
     warnings: list[str] = []
     p_by_label = {f"P{i}": c for i, c in enumerate(products, 1)}
     e_labels = {f"E{i}" for i in range(1, len(evidence) + 1)}
     excluded = {a.lower() for a in pet.exclude_allergens}
+    # numbers each part of the prompt contains, for the number check
+    q_nums = _numbers(question)
+    p_nums = {f"P{i}": _numbers(product_entry(c)) for i, c in enumerate(products, 1)}
+    e_nums = {f"E{i}": _numbers(evidence_entry(c)) for i, c in enumerate(evidence, 1)}
+    all_nums = q_nums.union(*p_nums.values(), *e_nums.values())
 
     summary = _clean_citations(_name_products(str(raw.get("summary") or ""), p_by_label),
                                e_labels, warnings, "summary")
+    # the summary may talk about any product or excerpt, so it's checked against all of them
+    summary = _drop_unsupported_numbers(summary, all_nums, warnings, "summary")
     recs: list[Recommendation] = []
     seen: set[str] = set()
     raw_recs = raw.get("recommendations")
@@ -246,7 +324,15 @@ def check_answer(raw: dict, pet: PetProfile, products: list[Candidate],
         dropped_ev = len(r.get("evidence") or []) - len(ev)
         if dropped_ev > 0:
             warnings.append(f"{label}: removed {dropped_ev} unknown evidence label(s)")
-        ev = list(dict.fromkeys(ev + _LABEL.findall(reason)))   # inline cites count too
+        # a reason may only use numbers from its own product, the excerpts it cites, or the question
+        allowed = p_nums[label] | q_nums
+        for e in dict.fromkeys(ev + _LABEL.findall(reason)):
+            allowed |= e_nums[e]
+        reason = _drop_unsupported_numbers(reason, allowed, warnings, label)
+        if not reason:
+            warnings.append(f"dropped {label} ({p.get('name')}): no supported reason left")
+            continue
+        ev = list(dict.fromkeys(ev + _LABEL.findall(reason)))   # inline cites in what's left count too
         recs.append(Recommendation(label, p["doc_id"], p.get("name") or "", p.get("brand"), reason, ev))
         seen.add(label)
 
@@ -273,7 +359,7 @@ def answer(question: str, pet: PetProfile, retriever: HybridRetriever, llm: LLM,
     t["generate"] = (time.perf_counter() - t1) * 1000
     if not isinstance(raw, dict):
         raw = {}
-    summary, recs, cited, warnings = check_answer(raw, pet, products, evidence)
+    summary, recs, cited, warnings = check_answer(raw, pet, products, evidence, question)
 
     sources = [Source(f"E{i}", c.payload.get("source_id") or "", c.payload.get("title") or "",
                       c.payload.get("heading"), c.payload.get("pub_year"), f"E{i}" in cited)
