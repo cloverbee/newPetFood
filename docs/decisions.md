@@ -172,7 +172,7 @@ files in the root are git-ignored on purpose.
 - **No context, no LLM call:** if both searches return nothing, the answer says so instead of letting the model guess.
 - **Code:** `src/petfood/recommend/answer.py` (`PetProfile`, `PaperFilters`, `gather_context`, `build_prompt`, `check_answer`, `answer`); terminal wrapper `src/petfood/recommend/cli.py`; tests `tests/test_answer.py` (in-memory Qdrant, fake encoders, fake LLM). The LLM is any `(system, user) -> dict` callable, so Phase 3 can swap in Qwen3 without touching this code.
 - **Run:** `petfood-answer "question" --species cat --life-stage senior --food-form wet --exclude chicken --condition overweight`, or `make answer Q="…" ARGS="…"`. `--show-prompt` prints the prompt without calling the LLM; `--json` prints everything (sources, warnings, timings); `--no-rerank` skips the cross-encoder.
-- **Cost:** the reranker dominates: ~11–13 s per answer on CPU (two searches) vs ~40 ms with `--no-rerank`. DeepSeek takes ~2–2.5 s. Loading the reranker once in a long-running API process won't fix this, because the time is in scoring, not loading: fewer rerank candidates or a smaller reranker are the levers (Phase 6 can measure the quality cost).
+- **Cost** (see D18 for the current numbers): the reranker dominates: ~11–13 s per answer on CPU (two searches) vs ~40 ms with `--no-rerank`. DeepSeek takes ~2–2.5 s. Loading the reranker once in a long-running API process won't fix this, because the time is in scoring, not loading: fewer rerank candidates or a smaller reranker are the levers (Phase 6 can measure the quality cost).
 - **First real runs (2026-11-05):** the hydration question got 3 wet foods with correct citations. The overweight + chicken-allergy question got no recommendation, because the 3 remaining chicken-free wet foods didn't fit, and the model said so and pointed to a vet. That's the intended behaviour with a thin corpus.
 - **Open:** the product search uses the whole question as its query, so "overweight" doesn't steer it to low-calorie foods; filtering or sorting on `kcal_per_100g`/`fat_pct` would. With no life stage given, kitten foods can appear for an adult cat.
 
@@ -226,5 +226,22 @@ files in the root are git-ignored on purpose.
 - **Result:** the same question now recommends three wet foods, with reasons drawn from what each label lists ("Moisture is not listed").
 - **Open:**
   - Some product values look wrong, e.g. a wet food at 320 kcal/100g (typical of dry food), probably from Open Pet Food Facts on the wrong basis. The number check can't catch it because the value is in the data. A sanity check at ingest (wet food kcal or moisture out of range) would.
-  - Search took 48 s on that run against ~13 s before, without a code reason; probably memory pressure with Docker + Ollama + the reranker on 16 GB. Not confirmed.
+  - Search took 48 s on that run against ~13 s before. Mostly explained by D18 (padding inside rerank batches); the remaining run-to-run variance is probably memory pressure on 16 GB.
   - "Chicken Breast in Broth" may be a topper rather than a complete diet; products don't record "complete" vs "complementary" yet.
+
+## D18. Rerank one pair at a time on CPU
+- **Problem (2026-11-06):** an answer took 20–50 s, almost all of it in the cross-encoder. fastembed reranks in batches of 64 by default. A batch is one rectangular tensor, so every (question, text) pair is padded to the longest pair in it, and the model computes through the padding (attention cost grows with length²). One long product card made all 20 product pairs as long as itself.
+- **Measured** (M3, 16 GB, CPU via ONNX; scores identical to 4 decimals at every batch size):
+
+  | Batch size | 20 product cards | 30 paper chunks |
+  |---|---|---|
+  | 64 (fastembed default) | 17.7 s | 26.6 s |
+  | 8 | – | 24.1 s |
+  | 4 | 6.9 s | – |
+  | **1** | **4.3 s** | **16.5 s** |
+
+  Same-process A/B of `gather_context()` for one question, alternating: batch 64 → 29.7 s, 29.9 s; batch 1 → 18.8 s, 19.1 s.
+- **Decision:** `FastEmbedReranker(model_name, batch_size=1)` in `retrieval/embeddings.py`. On a CPU, batching gains little (the cores are already busy with one pair) and padding costs a lot. **On a GPU, raise it**: there, batching is where the speed comes from.
+- **Tried and rejected:** the CoreML execution provider (Apple GPU/Neural Engine) was slower (43–67 s). Only 405 of 641 graph nodes run on CoreML, so the model is split into 75 partitions with copies between them.
+- **Not a cloud GPU yet:** one developer running a few dozen questions a day doesn't justify paying for and running a GPU server. Revisit for real users (Phase 4 deployment), a bigger local LLM (27B needs a ~24 GB GPU anyway), or a hosted rerank API (Cohere/Jina/Voyage).
+- **Next levers, unmeasured for quality:** rerank 15 paper candidates instead of 30 (`k_rerank`); skip reranking products (8 reach the model, filters do most of the narrowing). The ~20 test questions should decide both.

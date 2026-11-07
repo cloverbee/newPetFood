@@ -68,12 +68,22 @@ class FastEmbedBM25:
 
 
 class FastEmbedReranker:
-    def __init__(self, model_name: str):
+    """Cross-encoder scores for (query, doc) pairs.
+
+    batch_size=1 by default: a batch is one rectangular tensor, so every pair is padded to the
+    longest one and the model computes through the padding. On a CPU that waste dominates.
+    Measured on an M3 (D18): 20 product cards took 17.7 s at the default batch of 64 and 4.3 s
+    one at a time; 30 paper chunks took 26.6 s and 16.5 s. Scores are identical. On a GPU,
+    larger batches pay off again, so raise it there.
+    """
+
+    def __init__(self, model_name: str, batch_size: int = 1):
         from fastembed.rerank.cross_encoder import TextCrossEncoder
         self.model = TextCrossEncoder(model_name=model_name)
+        self.batch_size = batch_size
 
     def score(self, query, docs):
-        return [float(s) for s in self.model.rerank(query, list(docs))]
+        return [float(s) for s in self.model.rerank(query, list(docs), batch_size=self.batch_size)]
 
 
 # ───────────── deterministic fakes (tests / offline dev) ─────────────
