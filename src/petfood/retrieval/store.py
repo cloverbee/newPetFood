@@ -38,6 +38,26 @@ def _or_unknown(key: str, rng: models.Range) -> models.Filter:
     ])
 
 
+# Which product labels suit each requested life stage (D17). AAFCO defines only two nutrient
+# profiles: growth (kittens/puppies) and adult maintenance; "senior" is a marketing label. So a
+# label that states no life stage is an adult food: it suits adults and seniors, never kittens.
+LIFE_STAGE_MATCHES = {
+    "kitten": ["kitten", "growth", "all"],
+    "puppy": ["puppy", "growth", "all"],
+    "adult": ["adult", "all"],
+    "senior": ["senior", "adult", "all"],
+}
+UNSTATED_LIFE_STAGE_OK = {"adult", "senior"}
+
+
+def _life_stage_condition(stage: str) -> models.Condition:
+    stated = models.FieldCondition(key="life_stage",
+                                   match=models.MatchAny(any=LIFE_STAGE_MATCHES.get(stage, [stage, "all"])))
+    if stage not in UNSTATED_LIFE_STAGE_OK:
+        return stated
+    return models.Filter(should=[stated, models.IsEmptyCondition(is_empty=models.PayloadField(key="life_stage"))])
+
+
 @dataclass
 class SearchFilters:
     doc_type: str | None = None                 # "paper" | "product"
@@ -69,9 +89,7 @@ class SearchFilters:
                 models.FieldCondition(key="has_ingredients", match=models.MatchValue(value=False)),
             ]))
         if self.life_stage:
-            # "all life stages" products are fine for any stage
-            must.append(models.FieldCondition(
-                key="life_stage", match=models.MatchAny(any=[self.life_stage, "all"])))
+            must.append(_life_stage_condition(self.life_stage))
         if self.food_form:
             must.append(models.FieldCondition(key="food_form", match=models.MatchValue(value=self.food_form)))
         # year filters constrain papers only; products have no years and pass through

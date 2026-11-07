@@ -20,7 +20,7 @@ uses it (D15). There is still **no router**: the model is chosen by hand with `-
 | Study years | 8 found · 22 not_stated · 8 no_dates · 0 pending | `make study-years` has run on every paper (D12) |
 | Products | 165 (75 cat, 90 dog) | Open Pet Food Facts; curated CSV is a stub (D2). **Mostly empty:** of 75 cat foods, 34 have ingredients, 11 protein, 2 moisture (D16) |
 | Chunks | 1,508 paper + 165 product = 1,673 | Qdrant `petfood_chunks` has 1,673 points, so it's in sync |
-| Tests | 110 pass, 4 skipped | Skipped = Postgres integration tests (need `PETFOOD_TEST_DB`) |
+| Tests | 122 pass, 4 skipped | Skipped = Postgres integration tests (need `PETFOOD_TEST_DB`) |
 
 **Pick up here:**
 0. **Product data is the weakest link (D16):** most cat products have no ingredients or nutrients,
@@ -206,3 +206,25 @@ files in the root are git-ignored on purpose.
 - **Limits:** the summary is checked against the whole prompt, so a summary that pins a real number on the wrong product still passes; only reasons are checked per product. Numbers written as words ("two") aren't checked. Rounding ("about 85%" for 84.5) is rejected, which is strict but safe.
 - **Result on the same hydration question:** both models now attach 84.5% to the right product and say "moisture is not listed" for the others. No sentence needed removing. qwen3:4b took 19 s on the first run and 65 s on this one with a nearly identical prompt; the cause wasn't investigated (likely memory pressure or a model reload), so local latency is unreliable on this laptop.
 - **What it exposed:** product data is mostly empty. Of 75 cat products: 34 have an ingredient list, 11 protein, 13 calories, **2 moisture**. 7 of the 8 products in the hydration prompt had no nutrition values or ingredients. Answers can't compare products on facts that aren't there, so better product data (D2) matters more than model tuning right now.
+
+## D17. Read the question for filters; an unstated life stage means adult food
+- **The failure (2026-11-06):** "What wet food is good for my adult cat?" got *no recommendation*. Three causes, all on the product side (the papers were fine):
+  1. "wet" and "adult" in the question weren't filters; only `--food-form`/`--life-stage` flags were. The search returned kitten foods, a dry food, a raw food and a product with no data.
+  2. Most labels don't state a life stage. Cat wet foods: 8 kitten, **0 adult**, 20 not stated. The model read "not stated" as "not suitable".
+  3. The prompt let the model recommend none whenever details were missing.
+- **Life-stage rule (owner's call, backed by AAFCO):** AAFCO defines only two nutrient profiles, *growth* and *adult maintenance*; "senior" is marketing. So a label without a life stage is an adult food.
+
+  | Requested | Matches labels |
+  |---|---|
+  | kitten | kitten, growth, all (unstated **excluded**: kittens need growth food) |
+  | adult | adult, all, **unstated** |
+  | senior | senior, adult, all, **unstated** |
+
+  Code: `LIFE_STAGE_MATCHES` and `_life_stage_condition()` in `retrieval/store.py` (Qdrant `IsEmpty` matches the unstated ones). The database keeps `life_stage` NULL (the label really doesn't say); only matching and the prompt treat it as adult. The prompt line reads "Life stage: adult (the label doesn't say, so it's an adult maintenance food)". This also changes `make search --life-stage senior`, which used to exclude adult foods.
+- **Filters from the question:** `profile_from_question()` in `recommend/answer.py` sets food form and life stage when the caller didn't. It only sets one when the question names exactly one ("is wet better than dry?" sets nothing). Ages count: "12-year-old" → senior (from 11 years, `SENIOR_FROM_YEARS`), "4 year old" → adult. Age phrases are removed before matching stage words, so "4 year old cat" isn't also read as "old cat". Explicit flags always win. The answer reports the profile it used (`Answer.profile`; the CLI prints a `filters:` line).
+- **Prompt rule:** every listed product already fits the pet's needs; missing details aren't a reason to reject one. Recommend the best 1–3, say what isn't listed, prefer products with ingredients or nutrients listed, and recommend none only if no listed product can provide what's asked.
+- **Result:** the same question now recommends three wet foods, with reasons drawn from what each label lists ("Moisture is not listed").
+- **Open:**
+  - Some product values look wrong, e.g. a wet food at 320 kcal/100g (typical of dry food), probably from Open Pet Food Facts on the wrong basis. The number check can't catch it because the value is in the data. A sanity check at ingest (wet food kcal or moisture out of range) would.
+  - Search took 48 s on that run against ~13 s before, without a code reason; probably memory pressure with Docker + Ollama + the reranker on 16 GB. Not confirmed.
+  - "Chicken Breast in Broth" may be a topper rather than a complete diet; products don't record "complete" vs "complementary" yet.

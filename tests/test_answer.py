@@ -2,7 +2,7 @@
 import pytest
 from qdrant_client import QdrantClient
 
-from petfood.recommend.answer import (VET_NOTE, PetProfile, answer, build_prompt, check_answer,
+from petfood.recommend.answer import (VET_NOTE, PetProfile, answer, build_prompt, check_answer, profile_from_question,
                                       gather_context, needs_vet_note)
 from petfood.retrieval.chunking import chunk_paper, chunk_product
 from petfood.retrieval.embeddings import HashDense, HashSparse, OverlapReranker
@@ -238,3 +238,34 @@ def test_summary_numbers_are_checked_against_all_context():
     summary, _r, _c, warnings = check_answer(raw, PetProfile(), [MARS, FUSSY], [STUDY])
     assert summary == "Wet diets above 65% moisture help [E1]. Mars Gelee has 84.5% moisture."
     assert "300" in warnings[0]
+
+
+# ───────────── reading the question; unstated life stage (D17) ─────────────
+@pytest.mark.parametrize("question,form,stage", [
+    ("What wet food is good for my adult cat?", "wet", "adult"),
+    ("Best kibble for a kitten?", "dry", "kitten"),
+    ("My 12-year-old cat is overweight", None, "senior"),
+    ("My 4 year old cat is picky", None, "adult"),
+    ("Is wet food better than dry food?", None, None),           # two forms named: no filter
+    ("Food for my kitten and my senior cat", None, None),        # two stages named: no filter
+    ("Healthy treats for cats", "treat", None),
+])
+def test_profile_from_question(question, form, stage):
+    pet = profile_from_question(question, PetProfile())
+    assert (pet.food_form, pet.life_stage) == (form, stage)
+
+
+def test_explicit_profile_beats_the_question():
+    pet = profile_from_question("wet food for my kitten", PetProfile(food_form="dry", life_stage="senior"))
+    assert (pet.food_form, pet.life_stage) == ("dry", "senior")
+
+
+def test_prompt_marks_unstated_life_stage_as_adult():
+    _s, user = build_prompt("q", PetProfile(), [FUSSY, _card("Kit", "Kit for cats, life stage: kitten", 3,
+                                                               life_stage="kitten")], [])
+    assert user.count("Life stage: adult (the label doesn't say") == 1   # Fussy Cat only
+
+
+def test_answer_reports_the_profile_it_used(retriever):
+    a = answer("wet food for my senior cat", PetProfile(), retriever, FakeLLM({"summary": "", "recommendations": []}))
+    assert a.profile["food_form"] == "wet" and a.profile["life_stage"] == "senior"

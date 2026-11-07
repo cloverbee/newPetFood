@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 from petfood.ingest.tagging import detect_topics
 from petfood.retrieval.chunking import split_sentences
@@ -45,6 +45,41 @@ class PetProfile:
     food_form: str | None = None               # dry | wet | raw | treat
     exclude_allergens: Sequence[str] = ()      # hard filter, e.g. ("chicken", "fish")
     conditions: Sequence[str] = ()             # free text, e.g. ("overweight",); always triggers the vet note
+
+
+# Words in a question that name a food form or life stage (D17). A filter is set only when the
+# question names exactly one, so "is wet better than dry?" filters nothing.
+_FORM_WORDS = {
+    "wet": r"\b(wet|canned|cans?|pouch(es)?|pat[eé]s?)\b",
+    "dry": r"\b(dry|kibble)\b",
+    "raw": r"\b(raw|freeze[- ]dried)\b",
+    "treat": r"\b(treats?|snacks?)\b",
+}
+_STAGE_WORDS = {
+    "kitten": r"\b(kittens?|\d+[- ]months?[- ]old)\b",
+    "senior": r"\b(senior|elderly|geriatric|older|old cat|aging|ageing)\b",
+    "adult": r"\badult\b",
+}
+_AGE_YEARS = re.compile(r"\b(\d{1,2})[- ]?(?:years?|yrs?)[- ]old\b", re.I)
+SENIOR_FROM_YEARS = 11   # cats are commonly called senior from about 11 years
+
+
+def _only_one(found: set[str]) -> str | None:
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def profile_from_question(question: str, pet: "PetProfile") -> "PetProfile":
+    """Fill food form and life stage from the question when the caller left them unset.
+    Explicit settings (CLI flags, API fields) always win."""
+    q = question.lower()
+    form = pet.food_form or _only_one({f for f, pat in _FORM_WORDS.items() if re.search(pat, q)})
+    # "4 year old cat" must not also count as "old cat": match stage words with ages removed
+    no_ages = _AGE_YEARS.sub(" ", q)
+    stages = {s for s, pat in _STAGE_WORDS.items() if re.search(pat, no_ages)}
+    for years in _AGE_YEARS.findall(q):
+        stages.add("senior" if int(years) >= SENIOR_FROM_YEARS else "adult")
+    stage = pet.life_stage or _only_one(stages)
+    return replace(pet, food_form=form, life_stage=stage)
 
 
 @dataclass
@@ -86,6 +121,7 @@ class Answer:
     n_products: int = 0        # candidates the model saw
     n_evidence: int = 0
     model: str | None = None   # which LLM wrote it; set by the caller
+    profile: dict = field(default_factory=dict)   # the profile actually used, after reading the question
     timings_ms: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -122,6 +158,10 @@ Rules:
   or product facts that are not in the text.
 - Only state a number about a product (moisture, protein, calories, ...) if it appears in THAT
   product's own entry. "Not listed" means the value is unknown: say nothing about it.
+- Every product listed already matches the pet's species, life stage, food form and allergy
+  needs. Missing details are NOT a reason to reject a product: recommend the best 1-3 and say
+  briefly what the label doesn't list. Prefer products whose ingredients or nutrients are listed.
+  Recommend none only if the question asks for something no listed product can provide.
 - Keep the summary to 3-5 sentences in plain language. In the summary and reasons, refer to
   products by name, never by their P label (the owner never sees the labels).
 
@@ -182,9 +222,13 @@ def _missing_facts(p: dict) -> list[str]:
 
 def product_entry(c: Candidate) -> str:
     """A product exactly as the model sees it (also what the number check compares against)."""
-    text = c.text[:MAX_PRODUCT_CHARS]
+    lines = [c.text[:MAX_PRODUCT_CHARS]]
+    if not c.payload.get("life_stage"):
+        lines.append("Life stage: adult (the label doesn't say, so it's an adult maintenance food)")
     missing = _missing_facts(c.payload)
-    return text + (f"\nNot listed: {', '.join(missing)}" if missing else "")
+    if missing:
+        lines.append(f"Not listed: {', '.join(missing)}")
+    return "\n".join(lines)
 
 
 def evidence_entry(c: Candidate) -> str:
@@ -345,13 +389,15 @@ def answer(question: str, pet: PetProfile, retriever: HybridRetriever, llm: LLM,
            papers: PaperFilters | None = None, k_products: int = 8, k_evidence: int = 5) -> Answer:
     t: dict[str, float] = {}
     t0 = time.perf_counter()
+    pet = profile_from_question(question, pet)
     products, evidence = gather_context(retriever, question, pet, papers, k_products, k_evidence)
     t["retrieve"] = (time.perf_counter() - t0) * 1000
     vet = VET_NOTE if needs_vet_note(question, pet) else None
 
     if not products and not evidence:   # nothing to ground an answer in: don't ask the model to guess
         return Answer(question, "No matching products or research were found for this question "
-                      "and pet profile.", [], [], vet, n_products=0, n_evidence=0, timings_ms=t)
+                      "and pet profile.", [], [], vet, n_products=0, n_evidence=0, timings_ms=t,
+                      profile=asdict(pet))
 
     system, user = build_prompt(question, pet, products, evidence)
     t1 = time.perf_counter()
@@ -366,4 +412,4 @@ def answer(question: str, pet: PetProfile, retriever: HybridRetriever, llm: LLM,
                for i, c in enumerate(evidence, 1)]
     t["total"] = (time.perf_counter() - t0) * 1000
     return Answer(question, summary, recs, sources, vet, warnings,
-                  n_products=len(products), n_evidence=len(evidence), timings_ms=t)
+                  n_products=len(products), n_evidence=len(evidence), timings_ms=t, profile=asdict(pet))

@@ -117,10 +117,25 @@ def test_allergen_exclusion_is_hard(store):
     assert names == {"Kidney Support Duck Wet Cat Food"}
 
 
-def test_life_stage_filter_keeps_all_life_stages(store):
-    f = SearchFilters(doc_type="product", species="cat", life_stage="senior")
-    names = {h.payload["name"] for h in store.search_dense("cat food", 20, f)}
-    assert names == {"Kidney Support Salmon Wet Cat Food", "Kidney Support Duck Wet Cat Food"}
+@pytest.fixture(scope="module")
+def stage_store():
+    """One cat food per label: kitten, adult, senior, all life stages, and no life stage stated."""
+    s = ChunkStore(QdrantClient(":memory:"), "stages", HashDense(dim=64), HashSparse())
+    s.ensure_collection()
+    s.upsert([chunk_product({"id": i, "source": "curated", "name": name, "species": "cat", "life_stage": stage})
+              for i, (name, stage) in enumerate([("K", "kitten"), ("A", "adult"), ("S", "senior"),
+                                                 ("ALL", "all"), ("NONE", None)], 1)])
+    return s
+
+
+@pytest.mark.parametrize("stage,expected", [
+    ("kitten", {"K", "ALL"}),                       # kittens need growth food: unstated labels excluded
+    ("adult", {"A", "ALL", "NONE"}),                # unstated label = adult maintenance food (D17)
+    ("senior", {"S", "A", "ALL", "NONE"}),          # adult maintenance suits healthy seniors
+])
+def test_life_stage_rules(stage_store, stage, expected):
+    f = SearchFilters(doc_type="product", species="cat", life_stage=stage)
+    assert {h.payload["name"] for h in stage_store.search_dense("cat food", 20, f)} == expected
 
 
 def _paper_ids(store, f):

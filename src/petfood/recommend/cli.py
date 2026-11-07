@@ -14,11 +14,16 @@ import sys
 import textwrap
 
 from petfood.recommend.answer import (Answer, PaperFilters, PetProfile, answer, build_prompt,
-                                      gather_context)
+                                      gather_context, profile_from_question)
 
 
 def _print(a: Answer) -> None:
-    print(f"\nQ: {a.question}\n")
+    print(f"\nQ: {a.question}")
+    used = {k: v for k, v in a.profile.items() if v and k != "species"}
+    if used:
+        print("   filters: " + "; ".join(f"{k.replace('_', ' ')}={', '.join(v) if isinstance(v, (list, tuple)) else v}"
+                                         for k, v in used.items()))
+    print()
     print(textwrap.fill(a.summary or "(no summary)", 100))
     if a.recommendations:
         print("\nRecommended:")
@@ -79,6 +84,7 @@ def main(argv: list[str] | None = None) -> None:
     retriever = make_retriever(rerank=not args.no_rerank)
 
     if args.show_prompt:
+        pet = profile_from_question(args.question, pet)
         products, evidence = gather_context(retriever, args.question, pet, papers,
                                             args.k_products, args.k_evidence)
         system, user = build_prompt(args.question, pet, products, evidence)
