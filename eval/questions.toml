@@ -1,0 +1,177 @@
+# Test questions for petfood-answer (run: make eval, or petfood-eval).
+#
+# Each [[q]] is one question a cat owner might ask. Edit freely: reword, add, delete.
+#
+#   id        short name, used in the results table
+#   question  what the owner types
+#   exclude   allergens the owner said to avoid (the app doesn't read these from the question yet)
+#   condition health conditions the owner gave (always triggers the vet note)
+#
+# [q.expect] is what a good answer must do. Leave a field out to skip that check.
+#   life_stage / food_form   the filter the question should produce ("none" = must not set one)
+#   min_recs                 at least this many products recommended (0 = a pure knowledge question)
+#   vet_note                 true = must include the "talk to your vet" note, false = must not
+#   papers                   title fragments; at least one of these papers should reach the model
+#
+# Paper titles available now (38 papers) are listed by `make stats`; questions marked GAP ask about
+# topics with no paper in the corpus yet, so a good answer says the evidence is missing.
+
+# ── choosing a food ──
+[[q]]
+id = "wet-adult"
+question = "What wet food is good for my adult cat?"
+[q.expect]
+life_stage = "adult"
+food_form = "wet"
+min_recs = 1
+vet_note = false
+
+[[q]]
+id = "dry-adult"
+question = "Which dry food would you recommend for a healthy adult cat?"
+[q.expect]
+life_stage = "adult"
+food_form = "dry"
+min_recs = 1
+vet_note = false
+
+[[q]]
+id = "kitten"
+question = "What should I feed my 3 month old kitten?"
+[q.expect]
+life_stage = "kitten"
+min_recs = 1
+vet_note = false
+
+[[q]]
+id = "senior-appetite"
+question = "My 13-year-old cat is losing interest in food. What wet food could help?"
+[q.expect]
+life_stage = "senior"
+food_form = "wet"
+min_recs = 1
+
+[[q]]
+id = "picky-eater"
+question = "My adult cat is a picky eater. Which wet food do cats like the most?"
+[q.expect]
+life_stage = "adult"
+food_form = "wet"
+min_recs = 1
+papers = ["food preference"]
+
+[[q]]
+id = "treats-water"
+question = "Are there treats that help my cat drink more water?"
+[q.expect]
+food_form = "treat"
+papers = ["Consuming treats"]
+
+# ── allergies (allergens given as settings, like a profile form would) ──
+[[q]]
+id = "no-chicken"
+question = "My cat is allergic to chicken. What food can I give her?"
+exclude = ["chicken"]
+[q.expect]
+min_recs = 1
+vet_note = true
+
+[[q]]
+id = "no-fish-wet"
+question = "Can you suggest a wet food without fish for my adult cat?"
+exclude = ["fish"]
+[q.expect]
+life_stage = "adult"
+food_form = "wet"
+min_recs = 1
+
+# ── health ──
+[[q]]
+id = "overweight-dry"
+question = "My cat is overweight. Which dry food should I feed?"
+[q.expect]
+food_form = "dry"
+min_recs = 1
+vet_note = true
+papers = ["Overweight in adult cats", "caloric restriction", "Obesity"]
+
+[[q]]
+id = "kidney-GAP"
+question = "My cat has kidney disease. What food should I buy?"
+condition = ["ckd"]
+[q.expect]
+vet_note = true
+
+[[q]]
+id = "urinary-GAP"
+question = "Which food helps prevent urinary crystals in cats?"
+[q.expect]
+vet_note = true
+papers = ["urine specific gravity"]
+
+# ── knowledge questions (recommendations optional) ──
+[[q]]
+id = "wet-vs-dry-water"
+question = "Is wet food better than dry food for keeping my cat hydrated?"
+[q.expect]
+food_form = "none"
+min_recs = 0
+papers = ["Consuming treats", "kibble diet"]
+
+[[q]]
+id = "raw-safety"
+question = "Is a raw diet safe for my cat?"
+[q.expect]
+min_recs = 0
+papers = ["Raw diets for dogs and cats", "Raw pet food as a risk factor"]
+
+[[q]]
+id = "vegan"
+question = "Can my cat eat a vegan diet?"
+[q.expect]
+min_recs = 0
+papers = ["Vegan"]
+
+[[q]]
+id = "grain-free"
+question = "Is grain-free food better for cats?"
+[q.expect]
+min_recs = 0
+papers = ["Carbohydrate source", "dietary fiber"]
+
+[[q]]
+id = "probiotics"
+question = "Do probiotics in cat food help with digestion?"
+[q.expect]
+min_recs = 0
+papers = ["Probiotics", "probiotic", "prebiotic-postbiotic"]
+
+[[q]]
+id = "fish-oil"
+question = "Is fish oil good for my cat?"
+[q.expect]
+min_recs = 0
+papers = ["Fish Oil"]
+
+[[q]]
+id = "insects"
+question = "Are insect-based foods good for cats?"
+[q.expect]
+min_recs = 0
+papers = ["insects"]
+
+[[q]]
+id = "heavy-metals"
+question = "Do dry cat foods contain heavy metals like lead?"
+[q.expect]
+food_form = "dry"
+min_recs = 0
+papers = ["Pb levels in dry cat foods"]
+
+[[q]]
+id = "gut-bacteria"
+question = "How does kibble versus canned food affect my cat's gut bacteria?"
+[q.expect]
+food_form = "none"
+min_recs = 0
+papers = ["kibble diet", "Gastrointestinal Microbiome"]

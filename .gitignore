@@ -4,6 +4,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 data/raw/
+eval/results/
 *.egg-info/
 
 # OS / editor

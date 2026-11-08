@@ -1,4 +1,4 @@
-.PHONY: setup up down reset-db test papers products products-us curated stats reparse retag prune study-years index reindex search answer
+.PHONY: setup up down reset-db test papers products products-us curated stats reparse retag prune study-years index reindex search answer eval
 
 setup:            ## create venv + install
 	python3 -m venv .venv && .venv/bin/pip install -U pip && .venv/bin/pip install -e ".[dev]"
@@ -53,3 +53,6 @@ search:           ## make search Q="kidney disease diet" ARGS="--species cat --t
 
 answer:           ## make answer Q="what wet food for an overweight senior cat?" ARGS="--life-stage senior --exclude chicken"
 	.venv/bin/petfood-answer "$(Q)" $(ARGS)
+
+eval:             ## make eval  (or ARGS="--llm local", ARGS="--only kitten vegan", ARGS="--k-rerank 15")
+	.venv/bin/petfood-eval $(ARGS)

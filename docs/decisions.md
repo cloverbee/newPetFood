@@ -28,8 +28,9 @@ uses it (D15). There is still **no router**: the model is chosen by hand with `-
    `data/products_curated.csv` for ~20 common US cat foods.
 1. **Allergen tagging gaps (D4):** "poultry" and "meat by-products" don't count as chicken. The
    LLM noticed this itself in a real answer; the tags should catch it first.
-2. **~20 test questions** with the papers/products a good answer should use, run through
-   `petfood-answer --json`. That's the start of the Phase 6 eval set and the router's data.
+2. **Test questions exist (D19):** 20 in `eval/questions.toml`, run with `make eval`. Next:
+   fix the two problems the first run found (allergy vet note; products pushed on knowledge
+   questions), then use the eval to decide `--k-rerank 15`, skipping product rerank, and local vs DeepSeek.
 3. **Phase 3:** the rules router (D7), choosing `--llm local` vs `deepseek` per question, with a
    DeepSeek retry when the local answer fails `check_answer()`. The 20 questions decide whether
    qwen3:4b is good enough (see D15's first comparison: it isn't yet).
@@ -248,3 +249,15 @@ files in the root are git-ignored on purpose.
 - **Tried and rejected:** the CoreML execution provider (Apple GPU/Neural Engine) was slower (43–67 s). Only 405 of 641 graph nodes run on CoreML, so the model is split into 75 partitions with copies between them.
 - **Not a cloud GPU yet:** one developer running a few dozen questions a day doesn't justify paying for and running a GPU server. Revisit for real users (Phase 4 deployment), a bigger local LLM (27B needs a ~24 GB GPU anyway), or a hosted rerank API (Cohere/Jina/Voyage).
 - **Next levers, unmeasured for quality:** rerank 15 paper candidates instead of 30 (`k_rerank`); skip reranking products (8 reach the model, filters do most of the narrowing). The ~20 test questions should decide both.
+
+## D19. A small eval set of owner questions, scored automatically (start of Phase 6)
+- **Why:** changes were judged by running one or two questions by hand. That's how the "no recommendation" problem was found (D17), but it can't show whether a change helps overall, and it can't decide open questions like `k_rerank` 15 vs 30 or whether qwen3:4b is good enough.
+- **Questions:** `eval/questions.toml`, 20 `[[q]]` entries written for the owner to edit: choosing a food (wet/dry/kitten/senior/picky/treats), allergies (`exclude = [...]`, set like a profile form since the app doesn't read allergens from text), health (overweight, kidney and urinary marked GAP: no papers yet), and knowledge questions (raw, vegan, grain-free, probiotics, fish oil, insects, heavy metals, gut bacteria). `[q.expect]` says what a good answer must do: `life_stage`/`food_form` (`"none"` = no filter), `min_recs`, `vet_note`, `papers` (title fragments).
+- **Runner:** `petfood-eval` / `make eval` (`src/petfood/eval/run.py`). Loads models once, runs each question through `answer()`, writes `eval/results/<time>-<llm>.jsonl` (git-ignored: regenerated every run), prints a table and the reason for each failure. Flags: `--llm local`, `--only id …`, `--k-rerank N`, `--no-rerank`.
+- **Checks** (`score()`, pure, tested in `tests/test_eval.py`): filters read from the question; enough recommendations; every recommended product fits the profile used (form, life stage with the D17 rule, no excluded allergen, has an ingredient list); vet note; expected paper retrieved and cited; nothing removed by `check_answer`. They catch basic mistakes, not bad answers: read the answers too.
+- **Committed, not private:** the questions and runner are versioned with the code; run outputs aren't. A private set built from real users' questions would come later and stay out of the public repo.
+- **Baseline (2026-11-07, DeepSeek, k_rerank 30, `20261107-214134-deepseek.jsonl`):** no errors; filters 11/11, recs 17/17, products fit 17/17, vet note **6/7**, paper retrieved **12/13**, cited 12/13, nothing removed 20/20; **13.0 s average** per answer (15.7 s slowest), since models load once.
+- **Problems it found (to fix next):**
+  1. *Chicken allergy got no vet note.* The `food_allergy` topic pattern (`ingest/tagging.py`) matches "food allergy" but not "allergic to chicken". A real bug.
+  2. *Products pushed on knowledge questions.* "Can my cat eat a vegan diet?" said no listed food is vegan, then recommended three meat foods; "Do dry foods contain heavy metals?" recommended three unrelated products. Cause: D17's prompt rule ("recommend none only if nothing can serve") makes the model always pick. The checks missed it: needs a `max_recs = 0` expectation on such questions.
+  - Also: picky-eater didn't retrieve the "food preference" paper, but that paper is about a new protein, not picky eating; the expectation is weak.

@@ -48,6 +48,20 @@ def _print(a: Answer) -> None:
           f"timings ms: { {k: round(v) for k, v in a.timings_ms.items()} })")
 
 
+def make_llm(name: str):
+    """'deepseek' (API) or 'local' (Ollama, LOCAL_MODEL). Returns (callable, model name)."""
+    if name == "local":
+        from functools import partial
+
+        from petfood.llm.ollama import OllamaClient
+        from petfood.recommend.answer import ANSWER_SCHEMA
+        client = OllamaClient()
+        return partial(client.chat_json, schema=ANSWER_SCHEMA), client.model
+    from petfood.llm.deepseek import DeepSeekClient
+    client = DeepSeekClient()
+    return client.chat_json, client.model
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="petfood-answer", description="Answer a pet food question with citations")
     p.add_argument("question")
@@ -91,20 +105,9 @@ def main(argv: list[str] | None = None) -> None:
         print(f"── system ──\n{system}\n\n── user ──\n{user}")
         return
 
-    if args.llm == "local":
-        from functools import partial
-
-        from petfood.llm.ollama import OllamaClient
-        from petfood.recommend.answer import ANSWER_SCHEMA
-        client = OllamaClient()
-        llm = partial(client.chat_json, schema=ANSWER_SCHEMA)
-    else:
-        from petfood.llm.deepseek import DeepSeekClient
-        client = DeepSeekClient()
-        llm = client.chat_json
-
+    llm, model = make_llm(args.llm)
     a = answer(args.question, pet, retriever, llm, papers, args.k_products, args.k_evidence)
-    a.model = client.model
+    a.model = model
     if args.json:
         print(json.dumps(a.to_dict(), indent=2, ensure_ascii=False))
     else:
