@@ -7,6 +7,8 @@ Two settings matter for small local models:
 - think=False: Qwen3 otherwise writes a long reasoning trace first (~4x slower on a laptop).
 - format=<JSON schema>: Ollama constrains decoding to the schema. With thinking off, plain
   "json" mode gave valid JSON with invented keys; a schema fixes the shape.
+- num_ctx=8192 (LOCAL_NUM_CTX): Ollama's default 4096-token window was nearly full (3,789
+  prompt tokens); an overflow silently drops the start of the prompt.
 """
 from __future__ import annotations
 
@@ -31,6 +33,7 @@ class OllamaClient:
         s = settings or get_settings()
         self.model = model or s.local_model
         self.think = s.local_think
+        self.num_ctx = s.local_num_ctx
         self.url = f"{s.ollama_base_url.rstrip('/')}/api/chat"
         # first call loads the model into memory (a few seconds); generation on a laptop is slow
         self.client = client or httpx.Client(timeout=300)
@@ -58,7 +61,7 @@ class OllamaClient:
             "stream": False,
             "think": self.think,
             "format": schema or "json",
-            "options": {"temperature": 0},
+            "options": {"temperature": 0, "num_ctx": self.num_ctx},
         })
         content = (data.get("message") or {}).get("content") or ""
         log.debug("ollama %s tokens in=%s out=%s total=%.1fs", self.model, data.get("prompt_eval_count"),

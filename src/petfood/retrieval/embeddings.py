@@ -7,11 +7,16 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
+
+
+def _cache(cache_dir: str | None) -> str | None:
+    return os.path.expanduser(cache_dir) if cache_dir else None
 
 
 @dataclass
@@ -37,9 +42,9 @@ class Reranker(Protocol):
 
 # ───────────── fastembed implementations ─────────────
 class FastEmbedDense:
-    def __init__(self, model_name: str, batch_size: int = 64):
+    def __init__(self, model_name: str, batch_size: int = 64, cache_dir: str | None = None):
         from fastembed import TextEmbedding
-        self.model = TextEmbedding(model_name=model_name)
+        self.model = TextEmbedding(model_name=model_name, cache_dir=_cache(cache_dir))
         self.batch_size = batch_size
         self.dim = len(next(iter(self.model.embed(["probe"]))))
 
@@ -55,9 +60,9 @@ class FastEmbedBM25:
     """Qdrant/bm25: produces term-frequency sparse vectors; the IDF part is applied by Qdrant
     (collection created with Modifier.IDF), so scores are true BM25 over the live corpus."""
 
-    def __init__(self, model_name: str = "Qdrant/bm25"):
+    def __init__(self, model_name: str = "Qdrant/bm25", cache_dir: str | None = None):
         from fastembed import SparseTextEmbedding
-        self.model = SparseTextEmbedding(model_name=model_name)
+        self.model = SparseTextEmbedding(model_name=model_name, cache_dir=_cache(cache_dir))
 
     def embed_documents(self, texts):
         return [Sparse(e.indices.tolist(), e.values.tolist()) for e in self.model.embed(list(texts))]
@@ -77,9 +82,9 @@ class FastEmbedReranker:
     larger batches pay off again, so raise it there.
     """
 
-    def __init__(self, model_name: str, batch_size: int = 1):
+    def __init__(self, model_name: str, batch_size: int = 1, cache_dir: str | None = None):
         from fastembed.rerank.cross_encoder import TextCrossEncoder
-        self.model = TextCrossEncoder(model_name=model_name)
+        self.model = TextCrossEncoder(model_name=model_name, cache_dir=_cache(cache_dir))
         self.batch_size = batch_size
 
     def score(self, query, docs):

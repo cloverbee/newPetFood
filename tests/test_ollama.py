@@ -9,7 +9,8 @@ from petfood.config import Settings
 from petfood.llm.ollama import OllamaClient
 
 URL = "http://localhost:11434/api/chat"
-SETTINGS = Settings(ollama_base_url="http://localhost:11434", local_model="qwen3:4b", local_think=False)
+SETTINGS = Settings(ollama_base_url="http://localhost:11434", local_model="qwen3:4b", local_think=False,
+                    local_num_ctx=8192)
 
 
 def _reply(content: str) -> httpx.Response:
@@ -25,6 +26,7 @@ def test_chat_json_sends_schema_no_think_and_temperature_zero():
     body = json.loads(route.calls.last.request.read())
     assert body["model"] == "qwen3:4b" and body["stream"] is False and body["think"] is False
     assert body["format"] == schema and body["options"]["temperature"] == 0
+    assert body["options"]["num_ctx"] == 8192
     assert [m["role"] for m in body["messages"]] == ["system", "user"]
 
 

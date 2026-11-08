@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     dense_model: str = "BAAI/bge-small-en-v1.5"
     sparse_model: str = "Qdrant/bm25"
     rerank_model: str = "BAAI/bge-reranker-base"
+    # Where fastembed keeps downloaded models (~1.3 GB). Its default is a macOS temp folder that
+    # the system may clear, forcing a re-download; a fixed folder avoids that.
+    fastembed_cache_dir: str = "~/.cache/fastembed"
 
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
@@ -28,6 +31,9 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     local_model: str = "qwen3:4b"
     local_think: bool = False   # Qwen3 "thinking" mode: ~4x slower, rarely needed with a JSON schema
+    # Context window in tokens (prompt + answer). Ollama's default of 4096 is nearly filled by an
+    # answer prompt (~3.8k tokens); past it, Ollama silently drops the start, where the rules are.
+    local_num_ctx: int = 8192
 
     contact_email: str = "you@example.com"  # sent to Europe PMC / OPFF as polite User-Agent
 

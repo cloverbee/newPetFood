@@ -116,6 +116,7 @@ files in the root are git-ignored on purpose.
 - All three model names are set in `.env`, so we can swap them and measure the difference in Phase 6.
 - **Code:** `retrieval/embeddings.py`. `FastEmbedDense`, `FastEmbedBM25`, `FastEmbedReranker` behind small Protocols. `HashDense`, `HashSparse` and `OverlapReranker` are offline fakes so unit tests need no model download (`make_store(fake=True)` in `retrieval/cli.py`).
 - **First run** of `make index` downloads ~400 MB of models.
+- **Model cache (2026-11-07):** fastembed downloads to `FASTEMBED_CACHE_DIR` (default `~/.cache/fastembed`, ~1.3 GB), passed as `cache_dir` by `make_store()`/`make_retriever()`. fastembed's default was a macOS temp folder the system can clear, which would force a re-download. Existing files were moved there.
 
 ## D10. Fusion is done in our code, not with Qdrant's built-in RRF
 - Qdrant can fuse server-side. Doing it in our code keeps each candidate's dense rank, BM25 rank, RRF rank and rerank score. That gives free ablations for evaluation (`--mode dense|sparse|hybrid|hybrid_rerank`) and makes it possible to debug why a result came first.
@@ -185,6 +186,8 @@ files in the root are git-ignored on purpose.
   - Thinking on: correct answers but ~700 tokens of reasoning first (~26 s for one sentence).
   - Thinking off + plain JSON mode: valid JSON with invented keys (`task`, `reasoning`).
   - **Thinking off + a JSON schema in `format`: correct shape in 1.7 s.** That's the setting used.
+- **Where the model files live (2026-11-07):** `~/.ollama/models` is a symlink to `/Volumes/PSSD/ollama-models` on the external SSD (2.3 GB moved; a 27B would be ~17 GB). The symlink works however Ollama is started, with no env var. Plug PSSD in before `ollama serve`; without it, Ollama reports the model missing and nothing is damaged (the files are only read, then held in memory). The old copy is at `~/.ollama/models.old-internal`, to delete once PSSD is trusted. **Speed:** PSSD was behind a USB 2.0 hub (480 Mb/s): 41 MB/s read, so loading qwen3:4b took 74 s (the 2.5 GB file alone takes 61 s to read; ~1.5 s from the internal drive). Plug it straight into a Mac port. Databases (Docker volumes) stay on the internal drive: they write constantly and an unplug mid-write can corrupt them.
+- **Context window:** `LOCAL_NUM_CTX=8192` is sent as `options.num_ctx`. Ollama's default 4096 was nearly full: the answer prompt is ~3,789 tokens, and an overflow silently drops the start of the prompt (the rules). Costs ~0.6 GB more memory (3.2 → 3.8 GB loaded).
 - **Code:** `src/petfood/llm/ollama.py` `OllamaClient.chat_json(system, user, schema=None)`: `think` from `LOCAL_THINK` (default false), temperature 0, retries on 5xx, clear errors when the server is down (`ollama serve`) or the model is missing (`ollama pull`). `ANSWER_SCHEMA` in `recommend/answer.py`. Config: `LOCAL_MODEL=qwen3:4b`, `LOCAL_THINK=false`. Tests: `tests/test_ollama.py` (HTTP mocked).
 - **Run:** `petfood-answer "question" --llm local` (default `--llm deepseek`).
 - **First comparison** ("Is wet food better than dry for hydration?", same retrieval, `--no-rerank`):

@@ -26,7 +26,8 @@ def make_store(fake: bool = False):
     if fake:
         return ChunkStore(QdrantClient(":memory:"), s.qdrant_collection, HashDense(), HashSparse())
     return ChunkStore(QdrantClient(url=s.qdrant_url), s.qdrant_collection,
-                      FastEmbedDense(s.dense_model), FastEmbedBM25(s.sparse_model))
+                      FastEmbedDense(s.dense_model, cache_dir=s.fastembed_cache_dir),
+                      FastEmbedBM25(s.sparse_model, cache_dir=s.fastembed_cache_dir))
 
 
 def make_retriever(store=None, rerank: bool = True):
@@ -34,7 +35,8 @@ def make_retriever(store=None, rerank: bool = True):
     from petfood.retrieval.pipeline import HybridRetriever
 
     s = get_settings()
-    return HybridRetriever(store or make_store(), FastEmbedReranker(s.rerank_model) if rerank else None)
+    return HybridRetriever(store or make_store(), FastEmbedReranker(s.rerank_model, cache_dir=s.fastembed_cache_dir)
+                           if rerank else None)
 
 
 def cmd_build(args) -> None:
