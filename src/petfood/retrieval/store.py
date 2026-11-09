@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from time import perf_counter
 
 from qdrant_client import QdrantClient, models
 
@@ -171,14 +172,29 @@ class ChunkStore:
         ])))
 
     # ── reads ──
-    def search_dense(self, query: str, limit: int, filters: SearchFilters | None = None) -> list[Hit]:
-        return self._query(self.dense.embed_query(query), DENSE, limit, filters)
+    # `timings`, if given, receives "<kind>_embed" and "<kind>_qdrant" in ms (latency breakdown)
+    def search_dense(self, query: str, limit: int, filters: SearchFilters | None = None,
+                     timings: dict | None = None) -> list[Hit]:
+        t0 = perf_counter()
+        vec = self.dense.embed_query(query)
+        return self._timed(vec, DENSE, limit, filters, timings, "dense", t0)
 
-    def search_sparse(self, query: str, limit: int, filters: SearchFilters | None = None) -> list[Hit]:
+    def search_sparse(self, query: str, limit: int, filters: SearchFilters | None = None,
+                      timings: dict | None = None) -> list[Hit]:
+        t0 = perf_counter()
         q: Sparse = self.sparse.embed_query(query)
         if not q.indices:
             return []
-        return self._query(models.SparseVector(indices=q.indices, values=q.values), SPARSE, limit, filters)
+        vec = models.SparseVector(indices=q.indices, values=q.values)
+        return self._timed(vec, SPARSE, limit, filters, timings, "sparse", t0)
+
+    def _timed(self, vec, using, limit, filters, timings, kind, t0) -> list[Hit]:
+        t1 = perf_counter()
+        hits = self._query(vec, using, limit, filters)
+        if timings is not None:
+            timings[f"{kind}_embed"] = (t1 - t0) * 1000
+            timings[f"{kind}_qdrant"] = (perf_counter() - t1) * 1000
+        return hits
 
     def _query(self, vector, using: str, limit: int, filters: SearchFilters | None) -> list[Hit]:
         res = self.client.query_points(

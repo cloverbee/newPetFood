@@ -261,3 +261,32 @@ files in the root are git-ignored on purpose.
   1. *Chicken allergy got no vet note.* The `food_allergy` topic pattern (`ingest/tagging.py`) matches "food allergy" but not "allergic to chicken". A real bug.
   2. *Products pushed on knowledge questions.* "Can my cat eat a vegan diet?" said no listed food is vegan, then recommended three meat foods; "Do dry foods contain heavy metals?" recommended three unrelated products. Cause: D17's prompt rule ("recommend none only if nothing can serve") makes the model always pick. The checks missed it: needs a `max_recs = 0` expectation on such questions.
   - Also: picky-eater didn't retrieve the "food preference" paper, but that paper is about a new protein, not picky eating; the expectation is weak.
+
+## D20. Latency breakdown per stage
+- **Why:** answers took 13–50 s and the cause kept being guessed (padding, memory pressure, DeepSeek). Each stage now records its own time, so the slow part is measured, not guessed.
+- **Code:**
+  - `ChunkStore.search_dense/search_sparse(timings=)` split query embedding from the Qdrant call.
+  - `HybridRetriever.retrieve()` adds `rerank_n` (texts scored).
+  - `gather_context(timings=)` prefixes each search's stages with `products.` / `papers.`.
+  - `answer()` adds `prompt`, `prompt_chars`, `generate`, `check`.
+  - The clients record `last_stats`: DeepSeek gives tokens in/out/cached and **attempts** (more than 1 = a retry, the likely cause of the 108 s call on 2026-11-06); Ollama gives load / read-prompt / write times. Callers copy it into `Answer.llm_stats`.
+  - `recommend/latency.py` groups and formats it: `petfood-answer` prints a bar chart per answer (plus model start-up, not counted in the total), and `petfood-eval` prints average / median / p90 / max per stage.
+  - Tests: `tests/test_latency.py`, plus a `last_stats` test in `tests/test_ollama.py`.
+- **Measured (20 eval questions, DeepSeek, `k_rerank` 30, batch 1, 2026-11-08, on battery with Low Power Mode on):**
+
+  | Stage | avg | p90 | max | share |
+  |---|---|---|---|---|
+  | products: embed + Qdrant | 0.05 s | 0.1 s | 0.1 s | 0% |
+  | products: rerank (0–30 cards, avg ~20) | 3.0 s | 4.6 s | 6.1 s | 13% |
+  | papers: embed + Qdrant | 0.04 s | 0.06 s | 0.1 s | 0% |
+  | **papers: rerank (always 30 excerpts)** | **16.5 s** | 18.7 s | 20.2 s | **74%** |
+  | DeepSeek (~3,100 tokens in, ~300 out, no retries) | 2.8 s | 3.3 s | 3.5 s | 12% |
+  | prompt + checks + other | <0.01 s | | | 0% |
+  | **total** | **22.4 s** | 25.1 s | 27.6 s | |
+
+  Model start-up: ~3 s per command (once per eval run).
+- **Findings:**
+  1. **Reranking paper excerpts is three quarters of the time**, ~0.55 s per excerpt (they're long, ~300 words). Product cards are shorter: ~0.15–0.2 s each. Embedding, Qdrant, prompt building and the checks are all negligible.
+  2. **Power mode doubles CPU stages.** The same eval on 2026-11-07 (plugged in) had search at 10.2 s average; on battery with Low Power Mode it was 19.6 s. DeepSeek, which isn't on the Mac, was unchanged (2.7 vs 2.8 s). Compare timings only between runs in the same power state. This also explains much of the earlier "unexplained" run-to-run variance (D17, D18).
+  3. Knowledge questions rerank up to 30 products that the answer then mostly shouldn't recommend.
+- **Levers, in order of payoff:** fewer paper candidates (`--k-rerank 15` should roughly halve 74% of the time); shorter paper text for the reranker (e.g. first ~150 words); skip product reranking (13%); a smaller reranker model. Each needs an eval run to check the quality cost (D19).

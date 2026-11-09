@@ -28,10 +28,13 @@ class DeepSeekClient:
         self.url = f"{s.deepseek_base_url.rstrip('/')}/chat/completions"
         self.client = client or httpx.Client(
             timeout=60, headers={"Authorization": f"Bearer {s.deepseek_api_key}"})
+        self.last_stats: dict = {}   # tokens and attempts of the latest call (latency breakdown)
+        self._attempts = 0
 
     @retry(retry=retry_if_exception_type((_Retryable, httpx.TransportError)),
            wait=wait_exponential(min=1, max=30), stop=stop_after_attempt(5), reraise=True)
     def _post(self, body: dict) -> dict:
+        self._attempts += 1
         r = self.client.post(self.url, json=body)
         if r.status_code == 429 or r.status_code >= 500:
             raise _Retryable(f"{r.status_code} from DeepSeek")
@@ -40,6 +43,7 @@ class DeepSeekClient:
 
     def chat_json(self, system: str, user: str) -> dict:
         """One deterministic call in JSON mode; returns the parsed JSON object."""
+        self._attempts = 0
         data = self._post({
             "model": self.model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -49,4 +53,7 @@ class DeepSeekClient:
         content = data["choices"][0]["message"]["content"]
         usage = data.get("usage") or {}
         log.debug("deepseek tokens in=%s out=%s", usage.get("prompt_tokens"), usage.get("completion_tokens"))
+        # attempts > 1 means a retry (timeout, 429 or 5xx) happened: the usual cause of a slow call
+        self.last_stats = {"tokens_in": usage.get("prompt_tokens"), "tokens_out": usage.get("completion_tokens"),
+                           "tokens_cached": usage.get("prompt_cache_hit_tokens"), "attempts": self._attempts}
         return json.loads(content)

@@ -64,3 +64,14 @@ def test_server_errors_are_retried():
     route = respx.post(URL).mock(side_effect=[httpx.Response(500, text="boom"), _reply('{"ok": true}')])
     assert OllamaClient(SETTINGS).chat_json("s", "u") == {"ok": True}
     assert route.call_count == 2
+
+
+@respx.mock
+def test_last_stats_split_load_prompt_and_output_time():
+    respx.post(URL).mock(return_value=httpx.Response(200, json={
+        "message": {"content": '{"ok": true}'}, "prompt_eval_count": 3789, "eval_count": 200,
+        "load_duration": 2_000_000_000, "prompt_eval_duration": 9_000_000_000, "eval_duration": 6_500_000_000}))
+    c = OllamaClient(SETTINGS)
+    c.chat_json("s", "u")
+    assert c.last_stats == {"tokens_in": 3789, "tokens_out": 200, "load_ms": 2000,
+                            "prompt_ms": 9000, "output_ms": 6500}

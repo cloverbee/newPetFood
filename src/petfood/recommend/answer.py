@@ -122,7 +122,8 @@ class Answer:
     n_evidence: int = 0
     model: str | None = None   # which LLM wrote it; set by the caller
     profile: dict = field(default_factory=dict)   # the profile actually used, after reading the question
-    timings_ms: dict[str, float] = field(default_factory=dict)
+    timings_ms: dict[str, float] = field(default_factory=dict)   # see recommend/latency.py
+    llm_stats: dict = field(default_factory=dict)   # tokens, retries, Ollama timings; set by the caller
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -131,18 +132,22 @@ class Answer:
 # ───────────── 1. retrieval ─────────────
 def gather_context(retriever: HybridRetriever, question: str, pet: PetProfile,
                    papers: PaperFilters | None = None, k_products: int = 8,
-                   k_evidence: int = 5) -> tuple[list[Candidate], list[Candidate]]:
+                   k_evidence: int = 5, timings: dict | None = None) -> tuple[list[Candidate], list[Candidate]]:
     """Two searches with the same question. Products are filtered by the pet's hard constraints,
-    papers by species and optional year filters. One product chunk = one product."""
+    papers by species and optional year filters. One product chunk = one product.
+    `timings`, if given, receives each search's stage times as "products.<stage>" / "papers.<stage>"."""
     pf = papers or PaperFilters()
-    products = retriever.retrieve(question, top_k=k_products, max_per_doc=1, filters=SearchFilters(
+    prod = retriever.retrieve(question, top_k=k_products, max_per_doc=1, filters=SearchFilters(
         doc_type="product", species=pet.species, life_stage=pet.life_stage, food_form=pet.food_form,
-        exclude_allergens=tuple(pet.exclude_allergens))).results
-    evidence = retriever.retrieve(question, top_k=k_evidence, filters=SearchFilters(
+        exclude_allergens=tuple(pet.exclude_allergens)))
+    evid = retriever.retrieve(question, top_k=k_evidence, filters=SearchFilters(
         doc_type="paper", species=pet.species,
         pub_year_from=pf.pub_year_from, pub_year_to=pf.pub_year_to,
-        study_year_from=pf.study_year_from, study_year_to=pf.study_year_to)).results
-    return products, evidence
+        study_year_from=pf.study_year_from, study_year_to=pf.study_year_to))
+    if timings is not None:
+        for name, r in (("products", prod), ("papers", evid)):
+            timings.update({f"{name}.{k}": v for k, v in r.timings_ms.items()})
+    return prod.results, evid.results
 
 
 # ───────────── 2. prompt ─────────────
@@ -390,7 +395,7 @@ def answer(question: str, pet: PetProfile, retriever: HybridRetriever, llm: LLM,
     t: dict[str, float] = {}
     t0 = time.perf_counter()
     pet = profile_from_question(question, pet)
-    products, evidence = gather_context(retriever, question, pet, papers, k_products, k_evidence)
+    products, evidence = gather_context(retriever, question, pet, papers, k_products, k_evidence, timings=t)
     t["retrieve"] = (time.perf_counter() - t0) * 1000
     vet = VET_NOTE if needs_vet_note(question, pet) else None
 
@@ -399,13 +404,18 @@ def answer(question: str, pet: PetProfile, retriever: HybridRetriever, llm: LLM,
                       "and pet profile.", [], [], vet, n_products=0, n_evidence=0, timings_ms=t,
                       profile=asdict(pet))
 
+    t1 = time.perf_counter()
     system, user = build_prompt(question, pet, products, evidence)
+    t["prompt"] = (time.perf_counter() - t1) * 1000
+    t["prompt_chars"] = len(system) + len(user)
     t1 = time.perf_counter()
     raw = llm(system, user)
     t["generate"] = (time.perf_counter() - t1) * 1000
     if not isinstance(raw, dict):
         raw = {}
+    t1 = time.perf_counter()
     summary, recs, cited, warnings = check_answer(raw, pet, products, evidence, question)
+    t["check"] = (time.perf_counter() - t1) * 1000
 
     sources = [Source(f"E{i}", c.payload.get("source_id") or "", c.payload.get("title") or "",
                       c.payload.get("heading"), c.payload.get("pub_year"), f"E{i}" in cited)

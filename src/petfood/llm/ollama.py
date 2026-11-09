@@ -37,6 +37,7 @@ class OllamaClient:
         self.url = f"{s.ollama_base_url.rstrip('/')}/api/chat"
         # first call loads the model into memory (a few seconds); generation on a laptop is slow
         self.client = client or httpx.Client(timeout=300)
+        self.last_stats: dict = {}   # Ollama's own timings for the latest call (latency breakdown)
 
     @retry(retry=retry_if_exception_type((_Retryable, httpx.TransportError)),
            wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3), reraise=True)
@@ -64,6 +65,12 @@ class OllamaClient:
             "options": {"temperature": 0, "num_ctx": self.num_ctx},
         })
         content = (data.get("message") or {}).get("content") or ""
+        ms = lambda k: round((data.get(k) or 0) / 1e6)   # Ollama reports nanoseconds
+        # load = reading the model into memory (0 when already loaded); prompt = reading the
+        # prompt (prefill); output = writing the answer token by token (decode)
+        self.last_stats = {"tokens_in": data.get("prompt_eval_count"), "tokens_out": data.get("eval_count"),
+                           "load_ms": ms("load_duration"), "prompt_ms": ms("prompt_eval_duration"),
+                           "output_ms": ms("eval_duration")}
         log.debug("ollama %s tokens in=%s out=%s total=%.1fs", self.model, data.get("prompt_eval_count"),
                   data.get("eval_count"), (data.get("total_duration") or 0) / 1e9)
         try:

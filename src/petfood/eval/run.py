@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from petfood.recommend.answer import Answer, PetProfile, answer
+from petfood.recommend.latency import format_many
 from petfood.retrieval.store import LIFE_STAGE_MATCHES, UNSTATED_LIFE_STAGE_OK
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -180,10 +181,13 @@ def main(argv: list[str] | None = None) -> None:
 
     from petfood.recommend.cli import make_llm
     from petfood.retrieval.cli import make_retriever
+    t0 = time.perf_counter()
     retriever = make_retriever(rerank=not args.no_rerank)
     if args.k_rerank:
         retriever.k_rerank = args.k_rerank
-    llm, model = make_llm(args.llm)
+    llm, client = make_llm(args.llm)
+    model = client.model
+    print(f"models loaded in {time.perf_counter() - t0:.1f} s (once for the whole run)")
 
     RESULTS.mkdir(parents=True, exist_ok=True)
     out = RESULTS / f"{time.strftime('%Y%m%d-%H%M%S')}-{args.llm}.jsonl"
@@ -196,7 +200,7 @@ def main(argv: list[str] | None = None) -> None:
             row = {"id": q.id, "question": q.question, "settings": settings}
             try:
                 a: Answer = answer(q.question, q.pet, retriever, llm)
-                a.model = model
+                a.model, a.llm_stats = model, dict(client.last_stats)
                 ad = a.to_dict()
                 products = _load_products({r["product_id"] for r in ad["recommendations"]})
                 row["checks"], row["notes"] = score(q, ad, products)
@@ -210,6 +214,8 @@ def main(argv: list[str] | None = None) -> None:
             f.flush()
 
     print_table(rows)
+    ok = [r["answer"] for r in rows if not r.get("error")]
+    print("\n" + format_many([a["timings_ms"] for a in ok], [a["llm_stats"] for a in ok]))
     print(f"\nFull answers: {out.relative_to(ROOT)}")
 
 

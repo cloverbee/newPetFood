@@ -73,11 +73,11 @@ class HybridRetriever:
         dense: list[Hit] = []
         sparse: list[Hit] = []
         if mode != "sparse":
-            dense = self.store.search_dense(query, self.k_dense, filters)
+            dense = self.store.search_dense(query, self.k_dense, filters, timings=t)
         t["dense"] = (time.perf_counter() - t0) * 1000
         t1 = time.perf_counter()
         if mode != "dense":
-            sparse = self.store.search_sparse(query, self.k_sparse, filters)
+            sparse = self.store.search_sparse(query, self.k_sparse, filters, timings=t)
         t["sparse"] = (time.perf_counter() - t1) * 1000
 
         by_id: dict[str, Candidate] = {}
@@ -105,6 +105,7 @@ class HybridRetriever:
         else:
             ranked = list(candidates)
         t["rerank"] = (time.perf_counter() - t2) * 1000
+        t["rerank_n"] = len(candidates) if mode == "hybrid_rerank" and self.reranker else 0
 
         results = (dedupe_by_doc(ranked, max_per_doc) if max_per_doc else ranked)[:top_k]
         for i, c in enumerate(results, start=1):

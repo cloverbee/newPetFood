@@ -12,9 +12,11 @@ import json
 import logging
 import sys
 import textwrap
+import time
 
 from petfood.recommend.answer import (Answer, PaperFilters, PetProfile, answer, build_prompt,
                                       gather_context, profile_from_question)
+from petfood.recommend.latency import format_one
 
 
 def _print(a: Answer) -> None:
@@ -44,22 +46,23 @@ def _print(a: Answer) -> None:
         print("\nChecks removed:")
         for w in a.warnings:
             print(f"  - {w}")
-    print(f"\n(model: {a.model} · context: {a.n_products} products, {a.n_evidence} excerpts · "
-          f"timings ms: { {k: round(v) for k, v in a.timings_ms.items()} })")
+    print(f"\n(model: {a.model} · context: {a.n_products} products, {a.n_evidence} excerpts)\n")
+    print(format_one(a.timings_ms, a.llm_stats, a.timings_ms.get("startup")))
 
 
 def make_llm(name: str):
-    """'deepseek' (API) or 'local' (Ollama, LOCAL_MODEL). Returns (callable, model name)."""
+    """'deepseek' (API) or 'local' (Ollama, LOCAL_MODEL). Returns (callable, client); the client
+    has .model and .last_stats (tokens etc. of the latest call)."""
     if name == "local":
         from functools import partial
 
         from petfood.llm.ollama import OllamaClient
         from petfood.recommend.answer import ANSWER_SCHEMA
         client = OllamaClient()
-        return partial(client.chat_json, schema=ANSWER_SCHEMA), client.model
+        return partial(client.chat_json, schema=ANSWER_SCHEMA), client
     from petfood.llm.deepseek import DeepSeekClient
     client = DeepSeekClient()
-    return client.chat_json, client.model
+    return client.chat_json, client
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -86,6 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    t_start = time.perf_counter()
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.WARNING,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -105,9 +109,11 @@ def main(argv: list[str] | None = None) -> None:
         print(f"── system ──\n{system}\n\n── user ──\n{user}")
         return
 
-    llm, model = make_llm(args.llm)
+    llm, client = make_llm(args.llm)
+    startup = (time.perf_counter() - t_start) * 1000   # loading the embedding + reranker models
     a = answer(args.question, pet, retriever, llm, papers, args.k_products, args.k_evidence)
-    a.model = model
+    a.model, a.llm_stats = client.model, client.last_stats
+    a.timings_ms["startup"] = startup
     if args.json:
         print(json.dumps(a.to_dict(), indent=2, ensure_ascii=False))
     else:
