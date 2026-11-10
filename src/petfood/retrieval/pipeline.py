@@ -58,12 +58,16 @@ class RetrievalResult:
 class HybridRetriever:
     def __init__(self, store: ChunkStore, reranker: Reranker | None = None,
                  k_dense: int = 30, k_sparse: int = 30, k_rerank: int = 30,
-                 rrf_k: int = 60, low_value_penalty: float = 0.5):
+                 rrf_k: int = 60, low_value_penalty: float = 0.5, rerank_max_words: int | None = None):
         self.store = store
         self.reranker = reranker
         self.k_dense, self.k_sparse, self.k_rerank = k_dense, k_sparse, k_rerank
         self.rrf_k = rrf_k
         self.low_value_penalty = low_value_penalty   # multiplier on rerank score for Methods chunks
+        # The reranker reads only the first N words of each candidate (None = all). Its cost grows
+        # with text length, and a chunk's opening (title — heading header + first sentences)
+        # carries most of its topic (D21). The LLM still gets the full text.
+        self.rerank_max_words = rerank_max_words
 
     def retrieve(self, query: str, top_k: int = 5, filters: SearchFilters | None = None,
                  mode: str = "hybrid_rerank", max_per_doc: int | None = 2) -> RetrievalResult:
@@ -96,7 +100,7 @@ class HybridRetriever:
 
         t2 = time.perf_counter()
         if mode == "hybrid_rerank" and self.reranker and candidates:
-            scores = self.reranker.score(query, [c.text for c in candidates])
+            scores = self.reranker.score(query, [_head(c.text, self.rerank_max_words) for c in candidates])
             for c, s in zip(candidates, scores):
                 if c.payload.get("low_value"):   # push Methods chunks down (scores may be negative logits)
                     s = s * self.low_value_penalty if s > 0 else s / self.low_value_penalty
@@ -112,6 +116,13 @@ class HybridRetriever:
             c.final_rank = i
         t["total"] = (time.perf_counter() - t0) * 1000
         return RetrievalResult(query=query, results=results, candidates=candidates, timings_ms=t)
+
+
+def _head(text: str, max_words: int | None) -> str:
+    if not max_words:
+        return text
+    words = text.split()
+    return text if len(words) <= max_words else " ".join(words[:max_words])
 
 
 def dedupe_by_doc(cands: list[Candidate], max_per_doc: int = 2) -> list[Candidate]:

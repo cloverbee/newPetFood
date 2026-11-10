@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     dense_model: str = "BAAI/bge-small-en-v1.5"
     sparse_model: str = "Qdrant/bm25"
     rerank_model: str = "BAAI/bge-reranker-base"
+    rerank_max_words: int | None = None   # reranker reads only the first N words of each candidate (D21)
     # Where fastembed keeps downloaded models (~1.3 GB). Its default is a macOS temp folder that
     # the system may clear, forcing a re-download; a fixed folder avoids that.
     fastembed_cache_dir: str = "~/.cache/fastembed"

@@ -234,3 +234,27 @@ def test_chunk_paper_routes_tables():
              "text": "Table 1 Diets\n| Nutrient | A |\n|---|---|\n| Crude protein | 45.2 |\n| Crude fat | 14.0 |"}]
     [c] = chunk_paper(p, secs)
     assert "\n| Crude protein | 45.2 |" in c.text and c.payload["section_type"] == "table"
+
+
+class _RecordingReranker:
+    """Remembers the texts it was asked to score."""
+    def __init__(self):
+        self.seen = []
+
+    def score(self, query, docs):
+        self.seen += list(docs)
+        return [0.0] * len(docs)
+
+
+def test_rerank_max_words_shortens_only_what_the_reranker_reads(store):
+    rec = _RecordingReranker()
+    r = HybridRetriever(store, rec, rerank_max_words=5)
+    res = r.retrieve("diet", top_k=3)
+    assert rec.seen and all(len(t.split()) <= 5 for t in rec.seen)
+    assert any(len(c.text.split()) > 5 for c in res.results)   # the LLM still gets full text
+
+
+def test_rerank_max_words_none_reads_full_text(store):
+    rec = _RecordingReranker()
+    HybridRetriever(store, rec).retrieve("diet", top_k=3)
+    assert any(len(t.split()) > 5 for t in rec.seen)

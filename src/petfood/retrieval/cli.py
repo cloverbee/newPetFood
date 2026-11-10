@@ -35,8 +35,8 @@ def make_retriever(store=None, rerank: bool = True):
     from petfood.retrieval.pipeline import HybridRetriever
 
     s = get_settings()
-    return HybridRetriever(store or make_store(), FastEmbedReranker(s.rerank_model, cache_dir=s.fastembed_cache_dir)
-                           if rerank else None)
+    reranker = FastEmbedReranker(s.rerank_model, cache_dir=s.fastembed_cache_dir) if rerank else None
+    return HybridRetriever(store or make_store(), reranker, rerank_max_words=s.rerank_max_words)
 
 
 def cmd_build(args) -> None:

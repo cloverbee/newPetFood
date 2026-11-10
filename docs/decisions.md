@@ -296,3 +296,21 @@ files in the root are git-ignored on purpose.
   - **But the evidence changed a lot:** only **62 of 98** excerpts given to the model were the same. Retrieval is deterministic and rerank scores don't depend on k, so the other 36 (37%) were excerpts the reranker picked from **fusion ranks 16–30**. The first-stage ranking (dense + BM25 + RRF) often places the best excerpt below 15, and the reranker rescues it. Some swaps look worse: e.g. wet-vs-dry-water lost the hydration study and the kibble-vs-canned microbiome paper and gained the ultra-processed review.
   - **Also learned:** DeepSeek at temperature 0 isn't deterministic; identical prompts gave different wording. A single answer comparison can't show a quality difference, only patterns over many questions.
   - **Decision:** keep 30 for now. The checks are too coarse to see the evidence loss (they only look for one expected paper). Next: shorter text for the reranker (same 30 candidates, less to read per candidate), or k=20; and a stronger quality check (graded relevance of the 5 excerpts).
+
+## D21. Shorter text for the reranker: tried, not adopted
+- **Idea:** keep all 30 candidates (so excerpts at fusion ranks 16–30 can still win, see D20) but let the cross-encoder read only the first N words. Paper chunks are ~300 words (median 300, max 387); product cards are short (median 18 words), so this only matters for papers.
+- **Code (kept, off by default):** `HybridRetriever(rerank_max_words=N)` / `RERANK_MAX_WORDS` in `.env`; the LLM still gets the full text. `scripts/compare_rerank.py` runs the search only (no LLM, deterministic) for the eval questions under several settings and reports how much of the baseline's selection survives. Tests in `tests/test_retrieval.py`.
+- **Result (2026-11-09, 20 eval questions, baseline = 30 candidates, full text):**
+
+  | Reranker reads | Paper excerpts kept | #1 excerpt same | Products kept |
+  |---|---|---|---|
+  | first 64 words | 46/98 (47%) | 7/20 | 93% |
+  | first 96 words | 51/98 (52%) | 7/20 | 95% |
+  | first 128 words | 53/98 (54%) | 4/20 | 99% |
+  | first 160 words | 59/98 (60%) | 11/20 | 99% |
+  | first 200 words | 72/98 (73%) | 12/20 | 100% |
+  | full text, k=20 | 71/98 (72%) | 15/20 | 85% |
+
+  Timings from this run aren't usable: settings ran in sequence for ~15 min and the Mac slowed as it went (short product cards, unaffected by truncation, went 1.2 → 2.1 s). The selection numbers are exact.
+- **Decision:** not adopted; `rerank_max_words` stays None. Every cheaper setting changes a quarter or more of the evidence. Keeping exactly today's evidence needs the same model on full text, so further speed has to come from hardware (GPU or a hosted rerank API).
+- **Learned:** the reranker's top 5 is fragile: small input changes reshuffle it, so many candidates score close together. "Different from baseline" isn't necessarily worse. To use any cheaper setting (shorter text, fewer candidates, smaller model), first build a graded relevance check (LLM judge: does each excerpt help answer the question, 0/1/2) and compare settings on that.
